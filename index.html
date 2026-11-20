@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>The Woods House — 3D First-Person ML Stealth</title>
+  <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.19.2/dist/ort.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
+  <style>
+    * { box-sizing: border-box; font-family: 'Segoe UI', system-ui, sans-serif; user-select: none; }
+    body { margin: 0; overflow: hidden; background: #030305; color: #e6edf3; }
+    #viewport { position: fixed; inset: 0; }
+    #damage-flash {
+      position: fixed; inset: 0; background: rgba(160, 0, 0, 0);
+      pointer-events: none; z-index: 15; transition: background 0.12s;
+    }
+    #vignette {
+      position: fixed; inset: 0; pointer-events: none; z-index: 8;
+      background: radial-gradient(circle at center, transparent 48%, rgba(0, 0, 0, 0.78) 100%);
+    }
+
+    #hud {
+      position: fixed; top: 14px; left: 50%; transform: translateX(-50%);
+      display: flex; gap: 14px; align-items: center; justify-content: space-between;
+      background: rgba(10, 12, 16, 0.86); border: 1px solid #2b313a;
+      padding: 10px 18px; border-radius: 10px; width: min(960px, 95vw);
+      backdrop-filter: blur(6px); z-index: 10; font-size: 0.84rem;
+    }
+    .bars { display: flex; gap: 12px; }
+    .bar-wrap { width: 96px; }
+    .bar-label { display: flex; justify-content: space-between; font-size: 0.72rem; margin-bottom: 3px; color: #c9d1d9; }
+    .bar-bg { background: #1d2229; height: 7px; border-radius: 4px; overflow: hidden; }
+    .bar-fill { height: 100%; transition: width 0.25s; }
+    #trust-fill { background: #3fb950; }
+    #curiosity-fill { background: #d29922; }
+    #aggression-fill { background: #f85149; }
+
+    .badge { padding: 3px 8px; border-radius: 4px; font-size: 0.72rem; font-weight: 700; }
+    .badge-rule { background: #1f6feb33; color: #58a6ff; border: 1px solid #1f6feb; }
+    .badge-ml { background: #8957e533; color: #d2a8ff; border: 1px solid #8957e5; }
+    .zone-safe { color: #3fb950; font-weight: 700; margin-left: 8px; }
+    .zone-danger { color: #f85149; font-weight: 700; margin-left: 8px; }
+    .zone-escape { color: #ff4d4d; font-weight: 800; margin-left: 8px; animation: pulse 0.8s infinite; }
+    @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
+
+    #crosshair {
+      position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
+      width: 6px; height: 6px; border-radius: 50%;
+      background: rgba(255,255,255,0.65); pointer-events: none; z-index: 9;
+    }
+    #interact-prompt {
+      position: fixed; top: 56%; left: 50%; transform: translateX(-50%);
+      background: rgba(10, 12, 16, 0.9); border: 1px solid #e3b341; color: #e3b341;
+      padding: 6px 14px; border-radius: 6px; font-size: 0.88rem; font-weight: 600;
+      pointer-events: none; z-index: 9;
+    }
+
+    #alert-feed {
+      position: fixed; bottom: 52px; left: 50%; transform: translateX(-50%);
+      max-width: min(780px, 92vw); padding: 10px 18px; border-radius: 8px;
+      background: rgba(10, 12, 16, 0.92); border: 1px solid #30363d;
+      color: #f0f6fc; font-size: 0.9rem; text-align: center; z-index: 12;
+      pointer-events: none; transition: opacity 0.3s;
+    }
+    .alert-warn { border-color: #d29922 !important; color: #f2cc60 !important; }
+    .alert-danger { border-color: #f85149 !important; color: #ff7b72 !important; font-weight: 600; }
+    .alert-whisper { border-color: #8957e5 !important; color: #d2a8ff !important; font-style: italic; }
+
+    #status-bar {
+      position: fixed; bottom: 10px; left: 50%; transform: translateX(-50%);
+      width: min(960px, 95vw); display: flex; justify-content: space-between;
+      font-size: 0.78rem; color: #8b949e; z-index: 10;
+      background: rgba(10,12,16,0.78); padding: 6px 14px; border-radius: 6px;
+    }
+
+    .overlay {
+      position: fixed; inset: 0; background: rgba(4, 5, 9, 0.9);
+      display: flex; flex-direction: column; justify-content: center; align-items: center;
+      padding: 24px; z-index: 20; backdrop-filter: blur(4px);
+    }
+    #screen-title {
+      background: linear-gradient(rgba(4, 5, 10, 0.62), rgba(4, 5, 10, 0.88)),
+        url("assets/textures/menu_bg.jpg") center / cover no-repeat;
+    }
+    .hidden { display: none !important; }
+    .card {
+      background: rgba(18, 22, 29, 0.94); border: 1px solid #30363d; padding: 26px 30px;
+      border-radius: 12px; max-width: 580px; width: 100%; box-shadow: 0 24px 60px rgba(0,0,0,0.85);
+    }
+    .card h2 { margin-top: 0; color: #ff6b6b; letter-spacing: 0.4px; }
+    .card p, .card li { color: #c9d1d9; line-height: 1.55; font-size: 0.92rem; }
+    button {
+      background: #8b1e24; color: #fff; border: 1px solid #b82931; padding: 10px 20px;
+      border-radius: 6px; cursor: pointer; font-weight: 600; font-size: 0.92rem; margin-top: 12px;
+    }
+    button:hover { background: #a8242b; }
+    .mode-row { display: flex; gap: 10px; margin: 14px 0 6px; }
+    .mode-btn {
+      flex: 1; background: #1a2029; border: 1px solid #30363d; color: #c9d1d9;
+      padding: 10px; border-radius: 6px; cursor: pointer; font-weight: 600; margin-top: 0;
+    }
+    .mode-btn.active { background: #6e161b; border-color: #ff6b6b; color: #fff; }
+    .choice-btn {
+      display: block; width: 100%; text-align: left; background: #21262d;
+      border: 1px solid #30363d; margin-top: 8px; padding: 11px 14px;
+    }
+    .choice-btn:hover { background: #30363d; border-color: #ff6b6b; }
+    #npc-reply {
+      margin-top: 14px; padding: 12px; background: #0d1117;
+      border-left: 3px solid #d29922; font-style: italic; font-size: 0.92rem;
+    }
+    .progress-track {
+      width: 100%; height: 10px; background: #21262d; border-radius: 6px;
+      overflow: hidden; margin-top: 14px; border: 1px solid #30363d;
+    }
+    .progress-fill {
+      height: 100%; width: 0%; background: #c92a2a; transition: width 0.2s;
+    }
+  </style>
+</head>
+<body>
+  <div id="viewport"></div>
+  <div id="vignette"></div>
+  <div id="damage-flash"></div>
+  <div id="crosshair"></div>
+  <div id="interact-prompt" class="hidden">Press [E] to Interact</div>
+  <div id="alert-feed" class="hidden"></div>
+
+  <div id="hud">
+    <div>
+      <span id="mode-badge" class="badge badge-rule">Rule-Based (Game 1/4)</span>
+      <span style="margin-left:8px;">Items: <strong id="items-count">0 / 3</strong></span>
+      <span style="margin-left:8px;">Mode: <strong id="diff-label">Normal</strong></span>
+      <span style="margin-left:8px;">Escape Strikes: <strong id="strikes-count">&infin;</strong></span>
+      <span id="zone-label" class="zone-safe">Ground Floor (Safe)</span>
+    </div>
+    <div class="bars">
+      <div class="bar-wrap">
+        <div class="bar-label"><span>Trust</span><span id="trust-val">50%</span></div>
+        <div class="bar-bg"><div id="trust-fill" class="bar-fill" style="width:50%"></div></div>
+      </div>
+      <div class="bar-wrap">
+        <div class="bar-label"><span>Curiosity</span><span id="curiosity-val">10%</span></div>
+        <div class="bar-bg"><div id="curiosity-fill" class="bar-fill" style="width:10%"></div></div>
+      </div>
+      <div class="bar-wrap">
+        <div class="bar-label"><span>Aggression</span><span id="aggression-val">10%</span></div>
+        <div class="bar-bg"><div id="aggression-fill" class="bar-fill" style="width:10%"></div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 1. Prototype Notice -->
+  <div id="screen-disclaimer" class="overlay">
+    <div class="card">
+      <h2>The Woods House — Prototype</h2>
+      <p><strong>Games 1–4:</strong> NPCs run on deterministic <strong>C++ WebAssembly</strong> rules with 3D AABB raycast line-of-sight.</p>
+      <p><strong>Game 5+:</strong> A 9-feature <strong>PyTorch Neural Network (ONNX)</strong> activates in your browser to predict mood shifts from stealth, missing items, and floor checks, while C++ <strong>Euclidean Distance</strong> selects choice-aware dialogue.</p>
+      <button id="btn-to-rules">Next &rarr;</button>
+    </div>
+  </div>
+
+  <!-- 2. Rules -->
+  <div id="screen-rules" class="overlay hidden">
+    <div class="card">
+      <h2>How to Survive</h2>
+      <ul>
+        <li><strong>Move &amp; Stealth:</strong> Mouse to look, <code>WASD</code> to move, <code>Space</code> to jump, <code>Shift</code> to crouch silently (shrinks NPC detection range), <code>F</code> to toggle flashlight.</li>
+        <li><strong>Light &amp; Sound:</strong> Shining your flashlight near NPCs or stepping on creaky floorboards upstairs draws them toward you.</li>
+        <li><strong>Floor Checks &amp; Trust:</strong> NPCs periodically check downstairs—if you're missing, their Curiosity spikes. High Trust lets you talk your way out; low Trust makes them aggressive.</li>
+        <li><strong>Lockdown Escape:</strong> Steal all 3 artifacts upstairs, then sprint downstairs to the <strong>Main Door</strong> before they catch you.</li>
+      </ul>
+      <button id="btn-to-title">Continue &rarr;</button>
+    </div>
+  </div>
+
+  <!-- 3. Title Screen + Mode Selection -->
+  <div id="screen-title" class="overlay hidden">
+    <div class="card">
+      <h2>THE WOODS HOUSE</h2>
+      <p>Select your difficulty before stepping inside:</p>
+      <div class="mode-row">
+        <button type="button" class="mode-btn" data-mode="easy">Easy</button>
+        <button type="button" class="mode-btn active" data-mode="normal">Normal</button>
+        <button type="button" class="mode-btn" data-mode="nightmare">Nightmare</button>
+      </div>
+      <p id="mode-desc">Normal: Flashlight &amp; creaks attract NPCs; 2 escape strikes allowed during lockdown.</p>
+      <button id="btn-start-loading">Start</button>
+    </div>
+  </div>
+
+  <!-- 4. Loading Screen -->
+  <div id="screen-loading" class="overlay hidden">
+    <div class="card">
+      <h2>Entering the Grounds...</h2>
+      <p id="loading-text">Initializing C++ WASM, PyTorch ONNX, textures, and characters...</p>
+      <div class="progress-track">
+        <div id="loading-bar" class="progress-fill"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Pause Overlay (Esc / Tab Switch) -->
+  <div id="screen-pause" class="overlay hidden">
+    <div class="card" style="text-align:center;">
+      <h2>Paused</h2>
+      <p>The house waits in the dark.</p>
+      <button id="btn-resume">Resume</button>
+    </div>
+  </div>
+
+  <!-- Confrontation Modal -->
+  <div id="screen-dialogue" class="overlay hidden">
+    <div class="card">
+      <h2 id="confront-title">Spotted!</h2>
+      <p id="confront-sub">Choose how to respond:</p>
+      <div id="choices-container"></div>
+      <div id="npc-reply" class="hidden"></div>
+      <button id="btn-continue" class="hidden">Continue</button>
+    </div>
+  </div>
+
+  <!-- End Screen -->
+  <div id="screen-end" class="overlay hidden">
+    <div class="card">
+      <h2 id="end-title">Game Over</h2>
+      <p id="end-desc"></p>
+      <button id="btn-restart">Play Next Game</button>
+    </div>
+  </div>
+
+  <div id="status-bar">
+    <span id="engine-status">Standby</span>
+    <a href="#" id="toggle-ai" style="color:#58a6ff; text-decoration:none;">[Dev: Jump to Game 5 (Force PyTorch AI)]</a>
+  </div>
+
+  <script src="house_engine.js"></script>
+  <script src="game.js"></script>
+</body>
+</html>

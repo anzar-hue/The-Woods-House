@@ -1,0 +1,15 @@
+# Local Windows C++ test builds
+*.exe
+house_engine.exe
+
+# Colab / local archive & temp audio artifacts
+*.zip
+raw_audio/
+*.onnx.data
+
+# Python & IDE clutter
+__pycache__/
+*.pyc
+.vscode/
+.DS_Store
+Thumbs.db

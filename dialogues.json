@@ -1,0 +1,102 @@
+{
+  "player_choices": [
+    {
+      "id": 0,
+      "type": "Bluff",
+      "options": [
+        "I got turned around looking for the bathroom.",
+        "I thought I heard a window rattling up here.",
+        "The floorboards creaked—I was checking if something fell.",
+        "I'm an appraiser, I just wanted a quick look at the woodwork.",
+        "Your front door was unlocked and I heard a noise upstairs.",
+        "I dropped my keys earlier and thought they rolled up the stairs.",
+        "Just admiring the antique hallway, didn't mean to wander.",
+        "I thought I smelled smoke coming from the study.",
+        "My phone lost signal downstairs, I was trying to get a bar.",
+        "I saw a shadow move past the upstairs window from outside.",
+        "I'm looking for the fuse box—the downstairs lamp flickered.",
+        "Honestly, I thought this was the guest wing."
+      ]
+    },
+    {
+      "id": 1,
+      "type": "Charm",
+      "options": [
+        "Sorry! Didn't mean to intrude—you have a stunning home.",
+        "My mistake completely. I'll head right back downstairs.",
+        "I was actually looking for you to thank you for your hospitality.",
+        "Please don't be alarmed, I'm leaving this room right now.",
+        "You startled me! I promise I wasn't touching anything.",
+        "I completely lost track of where I was—so sorry about that.",
+        "You've kept this place in incredible shape. I'll step back.",
+        "No harm meant at all. Hands up, I'm backing away.",
+        "I respect your privacy—I'll stick to the living room.",
+        "Forgive me, curiosity got the better of me. I'll go.",
+        "I didn't mean to invade your space, truly.",
+        "Let's start over—I'm heading straight back down the stairs."
+      ]
+    },
+    {
+      "id": 2,
+      "type": "Intimidate",
+      "options": [
+        "Back off. I'll walk wherever I want.",
+        "Mind your own business if you know what's good for you.",
+        "Keep staring at me and we're going to have a problem.",
+        "Step aside before this gets ugly.",
+        "You don't want to test my patience tonight.",
+        "Stay out of my way and nobody gets hurt.",
+        "Drop the act. You know I'm not leaving empty-handed.",
+        "Don't take another step closer to me.",
+        "I'm not scared of you or this creepy house.",
+        "Move, or I'll move you myself.",
+        "You're in no position to give me orders.",
+        "Lower your voice before I lose my temper."
+      ]
+    }
+  ],
+  "npc_lines": [
+    { "id": "n01", "triggers": ["charm"], "text": "Oh, don't worry about it! Just mind the creaky floorboards.", "mood_vector": [0.95, 0.05, 0.0] },
+    { "id": "n02", "triggers": ["charm"], "text": "You're polite, I'll give you that. Stick to the main hall, alright?", "mood_vector": [0.85, 0.15, 0.05] },
+    { "id": "n03", "triggers": ["charm", "bluff"], "text": "Easy mistake to make in the dark. The stairs are right behind you.", "mood_vector": [0.8, 0.2, 0.05] },
+    { "id": "n04", "triggers": ["bluff", "charm"], "text": "Everything okay? You seem a little jumpy.", "mood_vector": [0.65, 0.35, 0.1] },
+    { "id": "n05", "triggers": ["bluff", "charm"], "text": "Hmm. Alright, I'll take your word for it this time.", "mood_vector": [0.6, 0.4, 0.1] },
+    { "id": "n06", "triggers": ["bluff", "charm"], "text": "You shouldn't be wandering upstairs without asking.", "mood_vector": [0.45, 0.55, 0.15] },
+    { "id": "n07", "triggers": ["bluff"], "text": "Wait a second... why are you snooping around this room?", "mood_vector": [0.25, 0.8, 0.2] },
+    { "id": "n08", "triggers": ["bluff"], "text": "That excuse sounds rehearsed. What are you really looking for?", "mood_vector": [0.15, 0.9, 0.25] },
+    { "id": "n09", "triggers": ["bluff", "charm"], "text": "Hold on. Stay right where you are. Something about you doesn't add up.", "mood_vector": [0.1, 0.92, 0.35] },
+    { "id": "n10", "triggers": ["bluff"], "text": "I heard drawers opening up here. Empty your pockets.", "mood_vector": [0.05, 0.95, 0.4] },
+    { "id": "n11", "triggers": ["bluff"], "text": "You're sweating. People who aren't hiding anything don't sweat like that.", "mood_vector": [0.1, 0.88, 0.3] },
+    { "id": "n12", "triggers": ["bluff", "intimidate"], "text": "Keep your hands where I can see them. I'm watching you.", "mood_vector": [0.15, 0.75, 0.45] },
+    { "id": "n13", "triggers": ["intimidate"], "text": "Don't take that tone with me in my own house.", "mood_vector": [0.1, 0.3, 0.75] },
+    { "id": "n14", "triggers": ["intimidate"], "text": "You're pushing your luck, stranger. Step away before I make you.", "mood_vector": [0.05, 0.25, 0.88] },
+    { "id": "n15", "triggers": ["intimidate"], "text": "Big mistake threatening me under my own roof.", "mood_vector": [0.05, 0.2, 0.92] },
+    { "id": "n16", "triggers": ["intimidate"], "text": "One more word like that and you won't leave this hallway.", "mood_vector": [0.0, 0.15, 0.96] },
+    { "id": "n17", "triggers": ["intimidate"], "text": "That's it! You've crossed the line!", "mood_vector": [0.0, 0.1, 1.0] },
+    { "id": "n18", "triggers": ["bluff", "charm", "intimidate"], "text": "I'm calling the police right now. Don't move a muscle.", "mood_vector": [0.0, 1.0, 0.45] },
+    { "id": "n19", "triggers": ["bluff", "charm"], "text": "Why do I keep finding you near our valuables?", "mood_vector": [0.1, 0.85, 0.5] },
+    { "id": "n20", "triggers": ["bluff", "intimidate"], "text": "You think we don't notice when things go missing?", "mood_vector": [0.05, 0.8, 0.65] },
+    { "id": "n21", "triggers": ["intimidate", "charm"], "text": "Get downstairs. Now. Before I lose my patience.", "mood_vector": [0.2, 0.4, 0.7] },
+    { "id": "n22", "triggers": ["bluff", "charm"], "text": "I don't trust a single word coming out of your mouth.", "mood_vector": [0.05, 0.7, 0.6] },
+    { "id": "n23", "triggers": ["bluff"], "text": "Strange... I could have sworn I locked that door.", "mood_vector": [0.35, 0.75, 0.15] },
+    { "id": "n24", "triggers": ["intimidate"], "text": "My patience is gone. You shouldn't have come here.", "mood_vector": [0.0, 0.3, 0.95] }
+  ],
+  "missing_item_comments": [
+    "Wait... where is the {item}? It was right here a minute ago!",
+    "The {item} is gone! Someone has been up here!",
+    "Who touched the {item}?! Check the hallways!",
+    "No... the {item} is missing. That kid is still in the house!"
+  ],
+  "npc_meetings_normal": [
+    "Arthur: \"That kid living with us is kind of suspicious...\" | Eleanor: \"I know. I keep hearing footsteps near the stairs.\"",
+    "Eleanor: \"Did you lock the study?\" | Arthur: \"I thought I did. Keep your eyes open.\"",
+    "Arthur: \"Something feels off tonight.\" | Eleanor: \"Just don't let that guest out of your sight.\"",
+    "Eleanor: \"Why is the house so quiet?\" | Arthur: \"Because someone is trying not to be heard.\""
+  ],
+  "npc_meetings_missing": [
+    "Arthur: \"If that kid stole our items, we are going to kill him.\" | Eleanor: \"Agreed. Lock the doors.\"",
+    "Eleanor: \"Our things are disappearing!\" | Arthur: \"Then nobody leaves this house alive tonight.\"",
+    "Arthur: \"I've got the knife ready.\" | Eleanor: \"Good. Find the little thief and end it.\"",
+    "Eleanor: \"We shouldn't have let them stay here.\" | Arthur: \"Don't worry. They won't make it to the woods.\""
+  ]
+}
