@@ -5,7 +5,7 @@ colorFrom: gray
 colorTo: red
 sdk: static
 pinned: false
-short_description: 3D horror stealth game with C++ WASM raycasting + PyTorch ONNX NPC AI
+short_description: 3D horror stealth with C++ WASM & PyTorch ONNX AI
 ---
 
 # 🏚️ The Woods House
