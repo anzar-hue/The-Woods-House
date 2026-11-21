@@ -50,6 +50,8 @@ flowchart LR
 * **Weighted A\* & Mutual-Exclusion Patrols:** Two-floor navigation graph. Only one NPC checks Floor 1 at a time while the other guards remaining artifacts upstairs.
 * **Hiding & Stealth:** Hide (`E`) in the **Guest Room Wardrobe**, **Under the Study Desk**, or **Behind NW Crates**—getting seen ducking in triggers an immediate confrontation (`+20% Curiosity`). Includes a **Visibility Gem**, **Q/Z Corner Lean**, **Proximity Flashlight Flicker**, and **Staircase Warnings** (`+4% Curiosity`, 15s cooldown).
 * **Lockdown Ambush:** Stealing all **5 artifacts** (`Silver Key`, `Secret Ledger`, `Gold Locket`, `Pocket Watch`, `Family Photo`) triggers chase music and red alarm lighting. Arthur blocks the Main Door while Eleanor actively re-tracks your position every 1.5s.
+* **Voiced Ending Cutscenes:** Custom first-person **Death** (floor POV) and **Police Arrest** (animated siren overlay) cutscenes with synchronized dialogue.
+* **Local Save/Load System:** Mid-run save and resume support with a Pause-menu save prompt and in-game 2-step reset to Game 1.
 
 ### Difficulty & Controls
 
@@ -61,15 +63,10 @@ flowchart LR
 
 `WASD` Move · `Mouse` Look · `Shift` Crouch · `Q`/`Z` Lean · `Space` Jump / Skip Intro · `F` Flashlight · `E` Steal / Hide / Escape · `Tab` AI Telemetry · `Esc` Pause
 
-## Replay the Game 1 Intro (Reset Progress)
+## Save Progress & Reset to Game 1
 
-The voiced welcome cutscene plays once on **Game 1** (tracked per device via `localStorage`). To reset your progress and replay it:
-
-* **Quickest:** Open the game in an **Incognito / Private window**.
-* **Browser Console (Localhost):** Press `F12` → **Console** tab and run:
-  ```js
-  localStorage.clear(); location.reload();
-  ```
+* **Save & Continue:** Press `Esc` during gameplay → **Logout / Exit to Menu** → **Yes, Save & Exit** to store your mid-game progress (collected items, positions, and NPC moods). Progress is saved locally per device/browser via `localStorage`.
+* **Reset to Game 1:** Click **Reset to Game 1** on the Title Screen (with two-step confirmation) to wipe your saved run, reset the Game Count, and replay the voiced Game 1 intro cutscene.
 
 ## Run Locally
 

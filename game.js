@@ -5,7 +5,10 @@ const SafeStorage = {
   },
   set(key, val) {
     try { localStorage.setItem(key, String(val)); } catch {}
-  }
+  },
+  remove(key) {
+    try { localStorage.removeItem(key); } catch {}
+  },
 };
 
 // --- TUNING CONSTANTS ---
@@ -75,6 +78,26 @@ const SFX = {
     this.chaseAudio.pause();
     this.chaseAudio.currentTime = 0;
     this.chaseAudio = null;
+  },
+  sirenAudio: null,
+  playOneShot(filename, vol = 0.85) {
+    const a = new Audio(`${VOICE_BASE}${filename}`);
+    a.volume = vol;
+    a.play().catch(() => {});
+  },
+  startSiren() {
+    if (this.sirenAudio) return;
+    const a = new Audio(`${VOICE_BASE}police_siren.mp3`);
+    a.loop = true;
+    a.volume = 0.25;
+    a.play().catch(() => {});
+    this.sirenAudio = a;
+  },
+  stopSiren() {
+    if (!this.sirenAudio) return;
+    this.sirenAudio.pause();
+    this.sirenAudio.currentTime = 0;
+    this.sirenAudio = null;
   },
   playUIClick() {
     if (!this.ctx) return;
@@ -252,6 +275,8 @@ let stairWarnCooldown = 0;
 let introSeen = SafeStorage.get("woods_intro_seen", "0") === "1";
 let introStep = 0;
 let introStepTimer = 0;
+let cutsceneStep = 0;
+let cutsceneTimer = 0;
 
 const STAIR_LINES = [
   "It would be better if you go back down and sit like a good boy.",
@@ -301,7 +326,7 @@ const player = {
 // --- THREE.JS SCENE ---
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x020205);
-scene.fog = new THREE.FogExp2(0x020205, 0.078);
+scene.fog = new THREE.FogExp2(0x020205, 0.095);
 
 const camera = new THREE.PerspectiveCamera(72, window.innerWidth / window.innerHeight, 0.1, 75);
 camera.rotation.order = "YXZ";
@@ -311,7 +336,7 @@ renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.25));
 renderer.outputEncoding = THREE.sRGBEncoding;
 document.getElementById("viewport").appendChild(renderer.domElement);
 
-const ambientLight = new THREE.AmbientLight(0x181c28, 0.30);
+const ambientLight = new THREE.AmbientLight(0x181c28, 0.16);
 scene.add(ambientLight);
 
 const downstairsLamp = new THREE.PointLight(0xff9e44, 0.85, 17);
@@ -827,8 +852,13 @@ async function loadExtraAnimations() {
 function setNPCClip(npc, clip, loopOnce = false) {
   if (!npc.mixer || !clip) return;
   if (npc.currentAction && npc.currentAction.getClip() === clip && !loopOnce) return;
+
+  const prev = npc.currentAction;
   const next = npc.mixer.clipAction(clip);
   next.reset();
+  next.enabled = true;
+  next.setEffectiveTimeScale(1);
+  next.setEffectiveWeight(1);
   if (loopOnce) {
     next.setLoop(THREE.LoopOnce);
     next.clampWhenFinished = true;
@@ -836,9 +866,7 @@ function setNPCClip(npc, clip, loopOnce = false) {
     next.setLoop(THREE.LoopRepeat);
   }
   next.play();
-  if (npc.currentAction && npc.currentAction !== next) {
-    npc.currentAction.crossFadeTo(next, 0.25, false);
-  }
+  if (prev && prev !== next) prev.stop();
   npc.currentAction = next;
 }
 
@@ -903,6 +931,7 @@ function initNPCsOnce() {
 }
 
 function resetWorld() {
+  SFX.stopSiren(); document.getElementById("police-cutscene").classList.add("hidden");
   SFX.stopChaseTheme();
   items.forEach(it => scene.remove(it.mesh));
   usedPlayerLines.clear();
@@ -972,9 +1001,127 @@ function resetWorld() {
 
   updateHUD(true);
 }
+const SAVE_KEY = "woods_save_data";
+
+function hasSavedGame() {
+  return Boolean(SafeStorage.get(SAVE_KEY, null));
+}
+
+function updateContinueButton() {
+  const btn = document.getElementById("btn-continue-save");
+  if (!btn) return;
+  const raw = SafeStorage.get(SAVE_KEY, null);
+  if (!raw) {
+    btn.classList.add("hidden");
+    return;
+  }
+  try {
+    const data = JSON.parse(raw);
+    const modeLbl = MODES[data.selectedMode]?.label || "Normal";
+    btn.textContent = `Continue Saved Game (${data.itemsStolen}/${data.totalItems} Items · ${modeLbl})`;
+    btn.classList.remove("hidden");
+  } catch {
+    btn.classList.add("hidden");
+  }
+}
+
+function saveCurrentGame() {
+  const payload = {
+    selectedMode,
+    player: {
+      x: player.x, y: player.y, z: player.z,
+      yaw: player.yaw, pitch: player.pitch,
+      itemsStolen: player.itemsStolen
+    },
+    itemsStolen: player.itemsStolen,
+    totalItems: items.length,
+    flashlightOn,
+    lockdown,
+    lockdownStrikes,
+    npcsKnowItemsMissing,
+    playerMissingFromFloor1,
+    lastNoticedItem,
+    items: items.map(it => ({ id: it.id, stolen: it.stolen, noticedMissing: it.noticedMissing })),
+    npcs: npcs.map(n => ({
+      x: n.x, y: n.y, z: n.z,
+      mood: [...n.mood],
+      checkingFloor1: n.checkingFloor1,
+      sawPlayerOnFloor1: n.sawPlayerOnFloor1,
+      floor1Cooldown: n.floor1Cooldown
+    }))
+  };
+  SafeStorage.set(SAVE_KEY, JSON.stringify(payload));
+  updateContinueButton();
+}
+
+function applySavedGame() {
+  const raw = SafeStorage.get(SAVE_KEY, null);
+  if (!raw) return false;
+  try {
+    const data = JSON.parse(raw);
+    selectedMode = data.selectedMode || "normal";
+    resetWorld();
+
+    Object.assign(player, data.player);
+    flashlightOn = Boolean(data.flashlightOn);
+    flashlight.intensity = flashlightOn ? 3.4 : 0;
+    lockdown = Boolean(data.lockdown);
+    lockdownStrikes = data.lockdownStrikes || 0;
+    npcsKnowItemsMissing = Boolean(data.npcsKnowItemsMissing);
+    playerMissingFromFloor1 = Boolean(data.playerMissingFromFloor1);
+    lastNoticedItem = data.lastNoticedItem || null;
+
+    if (Array.isArray(data.items)) {
+      data.items.forEach(savedIt => {
+        const it = items.find(x => x.id === savedIt.id);
+        if (it) {
+          it.stolen = Boolean(savedIt.stolen);
+          it.noticedMissing = Boolean(savedIt.noticedMissing);
+          if (it.stolen && it.mesh) scene.remove(it.mesh);
+        }
+      });
+    }
+
+    if (Array.isArray(data.npcs)) {
+      data.npcs.forEach((savedN, idx) => {
+        if (!npcs[idx]) return;
+        npcs[idx].x = savedN.x;
+        npcs[idx].y = savedN.y;
+        npcs[idx].z = savedN.z;
+        npcs[idx].mood = Array.isArray(savedN.mood) ? [...savedN.mood] : [0.5, 0.1, 0.1];
+        npcs[idx].checkingFloor1 = Boolean(savedN.checkingFloor1);
+        npcs[idx].sawPlayerOnFloor1 = Boolean(savedN.sawPlayerOnFloor1);
+        npcs[idx].floor1Cooldown = savedN.floor1Cooldown ?? 14.0;
+        npcs[idx].rig.group.position.set(savedN.x, savedN.y, savedN.z);
+        assignNewPath(npcs[idx], FLOOR2_PATROL_NODES[Math.floor(Math.random() * FLOOR2_PATROL_NODES.length)]);
+      });
+    }
+
+    if (lockdown) SFX.startChaseTheme();
+    updateHUD(true);
+    return true;
+  } catch (err) {
+    console.warn("Failed to restore save:", err);
+    return false;
+  }
+}
+
+function exitToTitleMenu(shouldSave) {
+  if (shouldSave) saveCurrentGame();
+  SFX.stopChaseTheme();
+  SFX.stopSiren();
+  state = "MENU";
+  keys = {};
+  if (document.pointerLockElement) document.exitPointerLock();
+  document.getElementById("screen-pause").classList.add("hidden");
+  document.getElementById("logout-save-bar").classList.add("hidden");
+  document.getElementById("screen-title").classList.remove("hidden");
+  updateContinueButton();
+  SFX.startMenuAmbience();
+}
 
 // --- LOADING SEQUENCE ---
-async function runLoadingScreen() {
+async function runLoadingScreen(loadSave = false) {
   state = "LOADING";
   document.getElementById("screen-title").classList.add("hidden");
   document.getElementById("screen-loading").classList.remove("hidden");
@@ -1031,14 +1178,19 @@ async function runLoadingScreen() {
     }
 
     setProgress(100, "Entering the house...");
-    resetWorld();
+    const restored = loadSave && applySavedGame();
+    if (!restored) resetWorld();
 
     setTimeout(() => {
       document.getElementById("screen-loading").classList.add("hidden");
       animClock.getDelta();
       SFX.stopMenuAmbience();
 
-      if (gameCount === 1 && !introSeen) {
+      if (restored) {
+        state = "PLAYING";
+        showAlert(`Loaded saved progress (${player.itemsStolen}/${items.length} items).`, "warn", 4500);
+        safeLock();
+      } else if (gameCount === 1 && !introSeen) {
         startIntroCutscene();
       } else {
         state = "PLAYING";
@@ -1061,11 +1213,11 @@ function isOnStairs() {
 function isDangerZone() { return lockdown || isUpstairs(); }
 
 function updateHUD(force = false) {
-  const ref = activeNPC || npcs[0];
-  const [t, c, a] = ref ? ref.mood.map(v => Math.round(v * 100)) : [50, 10, 10];
+  const [at, ac, aa] = npcs[0] ? npcs[0].mood.map(v => Math.round(v * 100)) : [50, 10, 10];
+  const [et, ec, ea] = npcs[1] ? npcs[1].mood.map(v => Math.round(v * 100)) : [50, 10, 10];
   const zoneCode = lockdown ? 2 : isUpstairs() ? 1 : 0;
   const visState = player.hiding ? 0 : (player.crouching && !flashlightOn) ? 1 : 2;
-  const hudKey = `${gameCount}|${isMLActive()}|${player.itemsStolen}/${items.length}|${selectedMode}|${lockdownStrikes}|${zoneCode}|${visState}|${t}|${c}|${a}`;
+  const hudKey = `${gameCount}|${isMLActive()}|${player.itemsStolen}/${items.length}|${selectedMode}|${lockdownStrikes}|${zoneCode}|${visState}|${at},${ac},${aa}|${et},${ec},${ea}`;
   if (!force && hudKey === lastHudKey) return;
   lastHudKey = hudKey;
 
@@ -1102,12 +1254,21 @@ function updateHUD(force = false) {
     zone.className = "zone-safe";
   }
 
-  document.getElementById("trust-val").textContent = `${t}%`;
-  document.getElementById("curiosity-val").textContent = `${c}%`;
-  document.getElementById("aggression-val").textContent = `${a}%`;
-  document.getElementById("trust-fill").style.width = `${t}%`;
-  document.getElementById("curiosity-fill").style.width = `${c}%`;
-  document.getElementById("aggression-fill").style.width = `${a}%`;
+  // Arthur
+  document.getElementById("a-trust-val").textContent = `${at}%`;
+  document.getElementById("a-curiosity-val").textContent = `${ac}%`;
+  document.getElementById("a-aggression-val").textContent = `${aa}%`;
+  document.getElementById("a-trust-fill").style.width = `${at}%`;
+  document.getElementById("a-curiosity-fill").style.width = `${ac}%`;
+  document.getElementById("a-aggression-fill").style.width = `${aa}%`;
+
+  // Eleanor
+  document.getElementById("e-trust-val").textContent = `${et}%`;
+  document.getElementById("e-curiosity-val").textContent = `${ec}%`;
+  document.getElementById("e-aggression-val").textContent = `${ea}%`;
+  document.getElementById("e-trust-fill").style.width = `${et}%`;
+  document.getElementById("e-curiosity-fill").style.width = `${ec}%`;
+  document.getElementById("e-aggression-fill").style.width = `${ea}%`;
 }
 
 // --- LIVE AI & WASM TELEMETRY ([Tab]) ---
@@ -1210,6 +1371,7 @@ function pickFreshMeetingIndex(pool, usedSet) {
 // --- CONFRONTATION & KNIFE ATTACK ---
 function triggerKnifeAttack(npc, reasonText) {
   state = "KNIFE_ANIM";
+  SFX.playOneShot("mc_stab.mp3", 0.45);
   activeNPC = npc;
   activeNPC.killReason = reasonText;
   activeNPC.slashSoundPlayed = false;
@@ -1221,6 +1383,10 @@ function triggerKnifeAttack(npc, reasonText) {
 
 function startConfrontation(npc, customSub = null) {
   const cfg = MODES[selectedMode];
+  if (npc.mood[2] >= 1.0) {
+    triggerKnifeAttack(npc, `${npc.name} was already furious (100%) and attacked you on sight.`);
+    return;
+  }
   if (lockdown) {
     lockdownStrikes += 1;
     updateHUD(true);
@@ -1331,6 +1497,8 @@ function endGame(title, desc) {
   if (document.pointerLockElement) document.exitPointerLock();
   gameCount += 1;
   SafeStorage.set("woods_game_count", gameCount);
+  SafeStorage.remove(SAVE_KEY);
+  updateContinueButton();
   document.getElementById("end-title").textContent = title;
   document.getElementById("end-desc").textContent = desc;
   document.getElementById("screen-dialogue").classList.add("hidden");
@@ -1380,6 +1548,23 @@ function finishIntroCutscene() {
   showAlert("You have successfully entered their house with trust. Steal the items cautiously... death might be your ending.", "warn", 6000);
   safeLock();
 }
+function startDeathCutscene() {
+  state = "DEATH_CUTSCENE";
+  cutsceneStep = 0;
+  cutsceneTimer = 0;
+  SFX.stopChaseTheme();
+  if (document.pointerLockElement) document.exitPointerLock();
+  showAlert("You got caught.", "danger", 2500);
+  document.getElementById("blink-overlay").style.opacity = "1";
+}
+
+function startArrestCutscene() {
+  state = "ARREST_CUTSCENE";
+  cutsceneStep = 0;
+  cutsceneTimer = 0;
+  SFX.stopChaseTheme();
+  if (document.pointerLockElement) document.exitPointerLock();
+}
 function update() {
   const rawDt = animClock.getDelta();
   const dt = Math.min(rawDt, 0.05);
@@ -1396,14 +1581,12 @@ function update() {
 
   downstairsLamp.intensity = 0.80 + Math.sin(elapsed * 9.0) * 0.08 + (Math.random() > 0.97 ? -0.35 : 0);
   // --- ONE-TIME WELCOME CUTSCENE (GAME 1 — VOICE-SYNCED + BLINK) ---
-  if (sharedIdleClip) {
-      npcs.forEach(n => {
-        if (n.mixer && n.currentClip !== sharedIdleClip) setNPCClip(n, sharedIdleClip);
-      });
-    }
   if (state === "INTRO_ANIM") {
     animTimer += dt;
     introStepTimer += dt;
+    if (sharedIdleClip) {
+      npcs.forEach(n => setNPCClip(n, sharedIdleClip));
+    }
 
     const stepIn = Math.min(1, animTimer / 2.2);
     const camZ = 14.2 - stepIn * 2.7;
@@ -1441,6 +1624,83 @@ function update() {
     return;
   }
 
+  // --- DEATH CUTSCENE (BLINK -> FLOOR VIEW -> ELEANOR'S LINE) ---
+  if (state === "DEATH_CUTSCENE") {
+    cutsceneTimer += dt;
+
+    // Step 0: Screen goes black -> place camera on floor & position Arthur + Eleanor looking down
+    if (cutsceneStep === 0 && cutsceneTimer >= 0.9) {
+      cutsceneStep = 1;
+      cutsceneTimer = 0;
+
+      const fx = player.x, fz = player.z, fy = player.y;
+      camera.position.set(fx, fy + 0.25, fz);
+      camera.lookAt(fx, fy + 1.45, fz - 1.35);
+
+      npcs[0].rig.group.position.set(fx - 0.55, fy, fz - 1.35);
+      npcs[0].rig.group.lookAt(fx, fy + 0.25, fz);
+      npcs[1].rig.group.position.set(fx + 0.55, fy, fz - 1.35);
+      npcs[1].rig.group.lookAt(fx, fy + 0.25, fz);
+      npcs.forEach(n => { if (n.mixer && sharedIdleClip) setNPCClip(n, sharedIdleClip); });
+
+      document.getElementById("blink-overlay").style.opacity = "0";
+    }
+    // Step 1: Eyes open -> Eleanor delivers her line
+    else if (cutsceneStep === 1 && cutsceneTimer >= 0.8) {
+      cutsceneStep = 2;
+      cutsceneTimer = 0;
+      SFX.playVoice("death_eleanor.mp3", 0.95, true);
+      showAlert('Eleanor: "Let\'s bury this one in the backyard too."', "danger", 8000);
+    }
+    // Step 2: Wait for Eleanor to finish, then fade to end screen
+    else if (cutsceneStep === 2 && ((!SFX.currentVoice && cutsceneTimer >= 1.2) || cutsceneTimer >= 8.0)) {
+      endGame("YOU WERE KILLED", "Arthur and Eleanor buried you in the backyard.");
+    }
+    return;
+  }
+
+  // --- POLICE CAR CUTSCENE (WAIT FOR DIALOGUE -> BLINK LINE -> SIREN CAR) ---
+  if (state === "ARREST_CUTSCENE") {
+    cutsceneTimer += dt;
+
+    // Step 0: Wait for Eleanor/Arthur's confrontation line to finish, then blink to black
+    if (cutsceneStep === 0 && ((!SFX.currentVoice && cutsceneTimer >= 0.8) || cutsceneTimer >= 7.0)) {
+      cutsceneStep = 1;
+      cutsceneTimer = 0;
+      document.getElementById("blink-overlay").style.opacity = "1";
+      showAlert('[Both]: "We are calling the cops on you, you little bastard."', "danger", 3200);
+    }
+    // Step 1: Hold black screen so the player reads the line, then open into the police car
+    else if (cutsceneStep === 1 && cutsceneTimer >= 3.2) {
+      cutsceneStep = 2;
+      cutsceneTimer = 0;
+      document.getElementById("police-cutscene").classList.remove("hidden");
+      document.getElementById("blink-overlay").style.opacity = "0";
+      SFX.startSiren();
+    }
+    // Step 2: Arthur tells the officer
+    else if (cutsceneStep === 2 && cutsceneTimer >= 1.0) {
+      cutsceneStep = 3;
+      cutsceneTimer = 0;
+      SFX.playVoice("arrest_arthur.mp3", 0.95, true);
+      showAlert('Arthur: "Officer, we took him in out of the woods out of kindness, and he was stealing from our home!"', "warn", 12000);
+    }
+    // Step 3: Officer replies after Arthur finishes
+    else if (cutsceneStep === 3 && ((!SFX.currentVoice && cutsceneTimer >= 1.2) || cutsceneTimer >= 12.0)) {
+      cutsceneStep = 4;
+      cutsceneTimer = 0;
+      SFX.playVoice("arrest_officer.mp3", 0.95, true);
+      showAlert('Officer: "Yeah, alright... I know this guy. A very old, notorious thief. You\'re coming with me."', "whisper", 12000);
+    }
+    // Step 4: End after officer finishes
+    else if (cutsceneStep === 4 && ((!SFX.currentVoice && cutsceneTimer >= 1.2) || cutsceneTimer >= 10.0)) {
+      SFX.stopSiren();
+      document.getElementById("police-cutscene").classList.add("hidden");
+      endGame("ARRESTED", "You were caught and taken away in the patrol car.");
+    }
+    return;
+  }
+
   // --- KNIFE ATTACK ANIMATION ---
   if (state === "KNIFE_ANIM") {
     animTimer += dt;
@@ -1460,7 +1720,7 @@ function update() {
 
     if (animTimer >= 1.45) {
       camera.rotation.z = 0;
-      endGame("Game Over — Eliminated", activeNPC.killReason);
+      startDeathCutscene();
     }
     return;
   }
@@ -1877,6 +2137,87 @@ function update() {
 
   updateHUD();
 }
+// --- SAVE / CONTINUE / LOGOUT / 2x RESET HANDLERS ---
+document.getElementById("btn-continue-save").onclick = () => {
+  SFX.init();
+  SFX.playUIClick();
+  runLoadingScreen(true);
+};
+
+document.getElementById("btn-logout-prompt").onclick = () => {
+  SFX.playUIClick();
+  document.getElementById("logout-save-bar").classList.remove("hidden");
+};
+document.getElementById("btn-logout-save-yes").onclick = () => {
+  SFX.playUIClick();
+  exitToTitleMenu(true);
+};
+document.getElementById("btn-logout-save-no").onclick = () => {
+  SFX.playUIClick();
+  exitToTitleMenu(false);
+};
+document.getElementById("btn-logout-cancel").onclick = () => {
+  SFX.playUIClick();
+  document.getElementById("logout-save-bar").classList.add("hidden");
+};
+
+let resetConfirmStep = 0;
+const resetModal = document.getElementById("modal-reset-confirm");
+const resetTitle = document.getElementById("reset-modal-title");
+const resetMsg   = document.getElementById("reset-modal-msg");
+const resetYes   = document.getElementById("btn-reset-confirm-yes");
+
+document.getElementById("btn-reset-game1").onclick = () => {
+  SFX.playUIClick();
+  resetConfirmStep = 1;
+  resetTitle.textContent = "Reset to Game 1? (1/2)";
+  resetMsg.textContent = "All your progress, saved run, and Game Count will be lost.";
+  resetYes.textContent = "Yes, Reset";
+  resetModal.classList.remove("hidden");
+};
+
+resetYes.onclick = () => {
+  SFX.playUIClick();
+  if (resetConfirmStep === 1) {
+    resetConfirmStep = 2;
+    resetTitle.textContent = "Are You Absolutely Sure? (2/2)";
+    resetMsg.textContent = "Final confirmation: this will wipe your saved game and replay the Game 1 intro.";
+    resetYes.textContent = "Confirm Wipe";
+  } else {
+    SafeStorage.remove(SAVE_KEY);
+    SafeStorage.set("woods_game_count", 1);
+    SafeStorage.set("woods_intro_seen", "0");
+    gameCount = 1;
+    introSeen = false;
+    resetModal.classList.add("hidden");
+    updateContinueButton();
+    updateHUD(true);
+
+    const overlay = document.getElementById("reset-progress-overlay");
+    const statusTxt = document.getElementById("reset-status-text");
+    statusTxt.classList.remove("done");
+    statusTxt.textContent = "Resetting......";
+    overlay.classList.remove("hidden");
+
+    setTimeout(() => {
+      statusTxt.textContent = "Done";
+      statusTxt.classList.add("done");
+    }, 1300);
+
+    setTimeout(() => {
+      overlay.classList.add("hidden");
+      document.getElementById("screen-title").classList.remove("hidden");
+    }, 2200);
+  }
+};
+
+document.getElementById("btn-reset-confirm-no").onclick = () => {
+  SFX.playUIClick();
+  resetConfirmStep = 0;
+  resetModal.classList.add("hidden");
+};
+
+updateContinueButton();
 
 function animate() {
   requestAnimationFrame(animate);
@@ -2051,16 +2392,38 @@ document.getElementById("btn-start-loading").onclick = () => {
 };
 document.getElementById("btn-resume").onclick = () => {
   document.getElementById("screen-pause").classList.add("hidden");
+  document.getElementById("logout-save-bar").classList.add("hidden");
   state = "PLAYING";
   animClock.getDelta();
   safeLock();
 };
 document.getElementById("btn-continue").onclick = () => {
   document.getElementById("screen-dialogue").classList.add("hidden");
-  if (activeNPC.mood[2] >= 1.0) {
-    triggerKnifeAttack(activeNPC, `${activeNPC.name}'s aggression hit 100%. They snapped.`);
-  } else if (activeNPC.mood[1] >= 1.0) {
-    endGame("Game Over — Arrested", `${activeNPC.name}'s curiosity hit 100%. They called the police.`);
+  const other = npcs[0] === activeNPC ? npcs[1] : npcs[0];
+  let totalAgg = Math.round(npcs[0].mood[2] * 100) + Math.round(npcs[1].mood[2] * 100);
+  let totalCur = Math.round(npcs[0].mood[1] * 100) + Math.round(npcs[1].mood[1] * 100);
+
+  // If one snaps to 100% before the team threshold, they warn their partner
+  if (activeNPC.mood[2] >= 1.0 && totalAgg <= 185) {
+    other.mood[2] = Math.min(1, other.mood[2] + 0.40);
+    other.mood[1] = Math.min(1, other.mood[1] + 0.20);
+    activeNPC.investigateTimer = 10.0;
+    other.investigateTimer = 10.0;
+    showAlert(`${activeNPC.name} is furious (100%) and warned ${other.name}! Avoid ${activeNPC.name} at all costs!`, "danger", 5500);
+    updateHUD(true);
+    totalAgg = Math.round(npcs[0].mood[2] * 100) + Math.round(npcs[1].mood[2] * 100);
+  } else if (activeNPC.mood[1] >= 1.0 && totalCur <= 190) {
+    other.mood[1] = Math.min(1, other.mood[1] + 0.40);
+    other.investigateTimer = 8.0;
+    showAlert(`${activeNPC.name} is completely suspicious (100%) and tipped off ${other.name}!`, "warn", 5000);
+    updateHUD(true);
+    totalCur = Math.round(npcs[0].mood[1] * 100) + Math.round(npcs[1].mood[1] * 100);
+  }
+
+  if (totalAgg > 185) {
+    triggerKnifeAttack(activeNPC, `Combined Aggression passed 185% (${totalAgg}%). They snapped.`);
+  } else if (totalCur > 190) {
+    startArrestCutscene();
   } else {
     const farNode = FLOOR2_PATROL_NODES[Math.floor(Math.random() * FLOOR2_PATROL_NODES.length)];
     assignNewPath(activeNPC, farNode);
