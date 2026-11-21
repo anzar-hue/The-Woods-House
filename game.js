@@ -864,8 +864,9 @@ function attachMixamoModel(npc, modelPath) {
       mixers.push(mixer);
 
       npc.walkClip = (gltf.animations && gltf.animations.length > 0) ? gltf.animations[0] : null;
-      if (npc.walkClip) {
-        npc.currentAction = mixer.clipAction(npc.walkClip);
+      const startClip = (state === "INTRO_ANIM" && sharedIdleClip) ? sharedIdleClip : npc.walkClip;
+      if (startClip) {
+        npc.currentAction = mixer.clipAction(startClip);
         npc.currentAction.play();
       }
     },
@@ -1395,6 +1396,11 @@ function update() {
 
   downstairsLamp.intensity = 0.80 + Math.sin(elapsed * 9.0) * 0.08 + (Math.random() > 0.97 ? -0.35 : 0);
   // --- ONE-TIME WELCOME CUTSCENE (GAME 1 — VOICE-SYNCED + BLINK) ---
+  if (sharedIdleClip) {
+      npcs.forEach(n => {
+        if (n.mixer && n.currentClip !== sharedIdleClip) setNPCClip(n, sharedIdleClip);
+      });
+    }
   if (state === "INTRO_ANIM") {
     animTimer += dt;
     introStepTimer += dt;

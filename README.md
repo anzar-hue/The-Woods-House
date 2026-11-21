@@ -61,6 +61,16 @@ flowchart LR
 
 `WASD` Move · `Mouse` Look · `Shift` Crouch · `Q`/`Z` Lean · `Space` Jump / Skip Intro · `F` Flashlight · `E` Steal / Hide / Escape · `Tab` AI Telemetry · `Esc` Pause
 
+## Replay the Game 1 Intro (Reset Progress)
+
+The voiced welcome cutscene plays once on **Game 1** (tracked per device via `localStorage`). To reset your progress and replay it:
+
+* **Quickest:** Open the game in an **Incognito / Private window**.
+* **Browser Console (Localhost):** Press `F12` → **Console** tab and run:
+  ```js
+  localStorage.clear(); location.reload();
+  ```
+
 ## Run Locally
 
 WebAssembly and ONNX require HTTP (not `file://`):
