@@ -5,185 +5,85 @@ colorFrom: gray
 colorTo: red
 sdk: static
 pinned: false
-short_description: Horror stealth game with WASM raycasting + ONNX NPC AI
+short_description: 3D horror stealth game with C++ WASM raycasting + PyTorch ONNX NPC AI
 ---
 
 # 🏚️ The Woods House
 
-**A first-person horror stealth game that runs entirely in your browser: no backend, no install.**
-Sneak upstairs, steal three artifacts, and escape before the homeowners catch you. Their reactions are driven by a C++ WebAssembly engine and a small neural network trained in PyTorch and served in-browser through ONNX.
+**A 3D first-person horror stealth game running 100% client-side in the browser—no backend, no install.**  
+Sneak upstairs, steal five artifacts, and escape before Arthur and Eleanor catch you. Perception and scoring run in **C++ WebAssembly**, while adaptive NPC moods are driven by a **PyTorch neural network (ONNX)**.
 
-**[▶ Play in your browser](https://huggingface.co/spaces/tempestanzar/the-woods-house)** · Desktop browser, keyboard + mouse · Headphones recommended·
+[**▶ Play Live**](https://huggingface.co/spaces/tempestanzar/the-woods-house) · [**🎬 Gameplay Demo**](https://drive.google.com/file/d/1n2BcQOkjVJcbTLNcrdnQyYp8VHgD3ZJJ/view?usp=drive_link) · Desktop (Mouse + Keyboard) · Headphones recommended
 
-<p align="center">
-  <a href="https://drive.google.com/file/d/1n3I80K8V4BjSLUWSWB-K3ONMVGRilF4K/view?usp=drive_link">
-    <img src="assets/textures/menu_bg.jpg" alt="Watch The Woods House gameplay video" width="720">
-  </a>
-</p>
+> **Content note:** Horror themes, knife attack animation, and flashing red alarm lighting during Lockdown.
 
-<p align="center">
-  <a href="https://drive.google.com/file/d/1n3I80K8V4BjSLUWSWB-K3ONMVGRilF4K/view?usp=drive_link">🎬 Watch the gameplay video</a>
-</p>
+## Architecture & Engineering Highlights
 
-> **Content note:** horror themes, implied violence (knife attack animation), and flashing red alarm lighting during Lockdown.
-
----
-
-## Why this project exists
-
-This is an **applied ML engineering** portfolio piece. The goal was to ship a *complete* ML-in-the-loop system under real constraints, not just train a model:
-
-| Constraint | How it was handled |
-| :--- | :--- |
-| **Zero backend** | Inference runs client-side via `onnxruntime-web`; spatial math runs in WASM |
-| **Integrated GPUs (Intel Iris Xe)** | Frame-rate-independent (`dt`) simulation, lightweight scene, small model |
-| **Model might fail to load** | Deterministic C++ rule set doubles as a fallback, so the game never hard-crashes |
-| **Python → browser handoff** | PyTorch → single-file ONNX (no external data) → `onnxruntime-web` |
-
----
-
-## How it works
+| Layer | Implementation |
+| ----- | ----- |
+| **3D Engine & UI** | Three.js r128, Mixamo GLB characters (cached once on load), shared Lambert decor props, gothic HUD, **60 FPS on Intel Iris Xe** |
+| **C++ WebAssembly** | Emscripten (`-O3`) 3D AABB raycast line-of-sight (`cpp_has_los`, `cpp_is_spotted_los`), wall-attenuated sound (~50% dampening), Euclidean dialogue matching (`cpp_euclidean_score`), and deterministic rule fallback (`cpp_rule_delta`) |
+| **PyTorch → ONNX AI** | 9-feature MLP (`9 → 48 → 32 → 3`, ReLU + Tanh) trained on 12k synthetic encounters (< 0.0005 MSE), exported as a single `.onnx` file via `onnxruntime-web` (`numThreads = 1`) |
+| **Live Telemetry** | Press `Tab` in-game to inspect live FPS, draw calls, C++ raycast LOS, 9-feature ONNX input tensor, and mood deltas |
+| **Audio Pipeline** | 51+ horror-processed neural voice clips (`edge-tts` + `ffmpeg` pitch/reverb) with a priority-based voice queue, menu & lockdown soundtracks, and procedural WebAudio SFX |
 
 ```mermaid
 flowchart LR
     subgraph Browser
-      A[game.js<br/>Three.js scene + game loop] -->|positions, FOV| B[C++ WASM<br/>raycast LOS + scoring]
+      A[game.js<br/>Three.js + Weighted A* + Audio Queue] -->|rays & FOV| B[C++ WASM<br/>AABB LOS + Scoring]
       A -->|9 features| C[ONNX Runtime Web<br/>npc_brain.onnx]
-      B -->|dialogue match| A
+      B -->|LOS + line match| A
       C -->|mood deltas| A
-      A -.->|fallback if ONNX unavailable| D[cpp_rule_delta]
+      A -.->|fallback| D[cpp_rule_delta]
     end
-    E[train_brain.py<br/>PyTorch, Colab] -->|export| C
+    E[train_brain.py<br/>PyTorch] -->|export| C
 ```
 
-### 1. C++ WebAssembly engine (`house_engine.cpp` → `house_engine.wasm`)
+### How NPC AI Works
+* **Games 1–4:** Deterministic C++ WASM rules govern mood shifts (`Trust`, `Curiosity`, `Aggression`).
+* **Game 5+ (or Dev Toggle):** The PyTorch ONNX model takes 9 live features (danger zone, stolen ratio, stealth state, dialogue choice, current mood, missing-item awareness, floor-1 absence) and outputs bounded mood deltas.
+* **Consequences:** `Trust` scales incoming aggression; **100% Aggression** triggers a fatal knife attack, and **100% Curiosity** calls the police.
 
-Compiled with Emscripten (`-O3`) and called from JS through `cwrap`.
+## Core Gameplay
 
-- **Wall-occluded line of sight** (`cpp_has_los`, `cpp_is_spotted_los`): 3D AABB slab raycasts against walls and tall furniture, plus a forward FOV cone. NPCs and flashlight detection don't trigger through walls.
-- **Dialogue scoring** (`cpp_euclidean_score`): L2 distance between an NPC's live `[Trust, Curiosity, Aggression]` vector and each candidate line's mood vector.
-- **Rule-based mood deltas** (`cpp_rule_delta`): drives Games 1–4, and acts as the fallback if the ONNX model can't load or inference throws.
+* **One-Time Welcome Cutscene (Game 1):** First-time players get a voice-synced front-door intro with a blink-to-black transition (`Space` to skip). Subsequent runs drop straight into the ground floor.
+* **Weighted A\* & Mutual-Exclusion Patrols:** Two-floor navigation graph. Only one NPC checks Floor 1 at a time while the other guards remaining artifacts upstairs.
+* **Hiding & Stealth:** Hide (`E`) in the **Guest Room Wardrobe**, **Under the Study Desk**, or **Behind NW Crates**—getting seen ducking in triggers an immediate confrontation (`+20% Curiosity`). Includes a **Visibility Gem**, **Q/Z Corner Lean**, **Proximity Flashlight Flicker**, and **Staircase Warnings** (`+4% Curiosity`, 15s cooldown).
+* **Lockdown Ambush:** Stealing all **5 artifacts** (`Silver Key`, `Secret Ledger`, `Gold Locket`, `Pocket Watch`, `Family Photo`) triggers chase music and red alarm lighting. Arthur blocks the Main Door while Eleanor actively re-tracks your position every 1.5s.
 
-### 2. Neural NPC brain (`train_brain.py` → `npc_brain.onnx`)
+### Difficulty & Controls
 
-From **Game 5** onward (or via the Dev toggle in the status bar), a small MLP replaces the fixed rules.
+| Mode | NPC Speed | Lockdown Strikes | Flashlight Detection |
+| ----- | ----- | ----- | ----- |
+| **Easy** | Slow | 2 | Off |
+| **Normal** | Medium | 2 | On |
+| **Nightmare** | Fast | 0 (1 catch = fatal) | On + Item Guarding |
 
-- **Architecture:** `9 → 48 → 32 → 3` (ReLU hidden layers, Tanh output to bound mood shifts)
-- **Inputs (9):** danger-zone flag · stolen-artifact ratio · player stealth (standing/crouched) · dialogue choice (Bluff / Charm / Intimidate) · current Trust · Curiosity · Aggression · NPCs-noticed-missing-item flag · player-absent-from-Floor-1 flag
-- **Outputs (3):** `dTrust`, `dCuriosity`, `dAggression`
-- **Training data:** 12,000 synthetic encounters generated from a hand-authored behavioral model, with noise added. The model reached **< 0.0005 MSE** on this dataset.
-- **Deployment:** exported as one self-contained `.onnx` file and run with `onnxruntime-web` (`numThreads = 1`, since Static Spaces aren't cross-origin isolated).
+`WASD` Move · `Mouse` Look · `Shift` Crouch · `Q`/`Z` Lean · `Space` Jump / Skip Intro · `F` Flashlight · `E` Steal / Hide / Escape · `Tab` AI Telemetry · `Esc` Pause
 
-### 3. A confrontation, end to end
+## Run Locally
 
-1. An NPC gets line of sight (WASM) while you're upstairs or in Lockdown.
-2. You pick **Bluff**, **Charm**, or **Intimidate** (each shows a fresh variant so lines don't repeat).
-3. Rules (Games 1–4) or the ONNX model (Game 5+) return mood deltas, clamped to `[0, 1]`.
-4. WASM scores every choice-compatible NPC line against the new mood; the closest unused line is spoken.
-5. **Aggression hits 100%** → knife attack. **Curiosity hits 100%** → they call the police.
-
----
-
-## Gameplay
-
-- **Two-floor navigation graph:** BFS pathfinding across rooms and the staircase.
-- **Mutual-exclusion patrols:** only one NPC can check Floor 1 at a time, so Floor 2 is never left unguarded. The solo upstairs NPC tightly patrols the remaining un-stolen artifacts. If the NPC checking Floor 1 doesn't find you downstairs, their Curiosity spikes.
-- **Noisy artifact grabs:** stealing an item alerts the upstairs NPC, who immediately investigates that room.
-- **Missing-item detection:** NPCs notice stolen artifacts, whisper to each other about it, and start guarding what's left.
-- **Stealth, light and sound:** crouch to silence footsteps and shrink detection range; avoid shining the flashlight at NPCs; creaky floorboards draw them toward you.
-- **Lockdown ambush:** once all 3 artifacts are stolen, the house goes red. Arthur sprints to block the Main Door and stairs, while Eleanor actively re-tracks your nearest navigation node every 1.5 seconds. Escape through the Main Door.
-- **Difficulty:**
-
-| Mode | NPC speed | Escape strikes | Flashlight detection |
-| :--- | :--- | :--- | :--- |
-| Easy | Slow | 2 | Off |
-| Normal | Medium | 2 | On |
-| Nightmare | Fast | 0 (one catch is fatal) | On, plus item guarding |
-
-### Controls
-
-| Input | Action |
-| :--- | :--- |
-| Mouse | Look |
-| `W A S D` / Arrows | Move |
-| `Shift` | Crouch (silent steps, smaller detection range) |
-| `Space` | Jump |
-| `F` | Toggle flashlight |
-| `E` | Steal artifact / open Main Door during Lockdown |
-| `Esc` | Pause / release cursor |
-
----
-
-## Tech stack
-
-**Rendering:** Three.js r128 (WebGL), GLTFLoader, Mixamo characters (idle / stalk / stabbing clips)
-**Logic:** vanilla JavaScript, C++17 → WebAssembly (Emscripten)
-**ML:** PyTorch → ONNX (opset 14) → `onnxruntime-web`. The 9-feature MLP reached < 0.0005 MSE on 12,000 synthetic encounters and runs smoothly on integrated graphics (Intel Iris Xe).
-**Audio:** 38 voice clips generated offline with `edge-tts` (`en-GB-RyanNeural`, `en-GB-SoniaNeural`) and processed with `ffmpeg` (pitch drop, slowdown, reverb), plus procedural WebAudio for footsteps, creaks, heartbeat and slashes
-**Build:** Google Colab for training, audio synthesis and WASM compilation. The shipped game is static files only.
-
----
-
-## Repository structure
-
-```text
-├── index.html            # UI overlays: menus, HUD, dialogue, pause, end screens
-├── game.js               # Scene, nav graph, game loop, WASM + ONNX bridge
-├── dialogues.json        # Player options, mood-tagged NPC lines, whispered meetings
-├── house_engine.cpp      # C++ source: raycast LOS, Euclidean scoring, rule deltas
-├── house_engine.js/.wasm # Emscripten build output
-├── npc_brain.onnx        # Trained NPC model (single file)
-├── train_brain.py        # Data generation, training, ONNX export (Colab-ready)
-├── LICENSE               # MIT
-└── assets/
-    ├── audio/            # Voice clips (Arthur, Eleanor, meetings)
-    ├── models/           # Mixamo GLB characters and animation clips
-    └── textures/         # Wallpaper, floor, ceiling, title background
-```
-
----
-
-## Run locally
-
-WebAssembly and ONNX need HTTP, not `file://`:
+WebAssembly and ONNX require HTTP (not `file://`):
 
 ```bash
 python -m http.server 8000
 # open http://localhost:8000
 ```
 
-**Rebuild the WASM engine** (requires the [Emscripten SDK](https://emscripten.org/)):
-
+**Rebuild WASM:**
 ```bash
-em++ house_engine.cpp -O3 -o house_engine.js \
-  -sEXPORTED_RUNTIME_METHODS=cwrap -sALLOW_MEMORY_GROWTH=1
+em++ house_engine.cpp -O3 -o house_engine.js -sEXPORTED_RUNTIME_METHODS=cwrap -sALLOW_MEMORY_GROWTH=1
 ```
 
-**Retrain the NPC model:**
-
+**Retrain Model:**
 ```bash
 pip install torch numpy onnx
-python train_brain.py   # writes npc_brain.onnx
+python train_brain.py
 ```
 
----
+## Notes & Credits
 
-## Limitations and honest notes
+* **Scope:** The ONNX brain is distilled from a hand-authored behavioral simulator; navigation uses a fixed 2-floor node graph; voice clips are pre-rendered.
+* **Credits:** [Mixamo](https://www.mixamo.com/) characters/animations · [`edge-tts`](https://github.com/rany2/edge-tts) voices · [Three.js](https://threejs.org/) · [ONNX Runtime Web](https://onnxruntime.ai/) · [Emscripten](https://emscripten.org/).
 
-- **The model is distilled from a hand-written simulator**, not learned from real player data. It learns smooth, context-dependent mood responses, but it can't discover behavior nobody encoded.
-- **Navigation is a hand-authored graph.** NPCs follow it and don't dynamically avoid obstacles.
-- **Voice clips are pre-rendered**, so NPC speech is selected from a fixed set, not generated at runtime.
-- Tested primarily on desktop Chromium; mobile and touch controls aren't supported.
-
----
-
-## Credits and licenses
-
-- Characters and animations: [Mixamo](https://www.mixamo.com/) (Adobe), subject to Mixamo's terms of use
-- Voices: Microsoft Edge neural TTS via [`edge-tts`](https://github.com/rany2/edge-tts)
-- Libraries: [Three.js](https://threejs.org/) (MIT), [ONNX Runtime Web](https://onnxruntime.ai/) (MIT), [Emscripten](https://emscripten.org/) (MIT/UIUC)
-- Textures: `menu_bg.jpg` is AI-generated title artwork; `wallpaper.jpg`, `wood_floor.jpg`, and `ceiling.jpg` are seamless architectural textures
-
-Code released under the [MIT License](LICENSE).
-
-Built by **Mohd Anzar** ([@anzar-hue](https://github.com/anzar-hue)).
+Released under the [MIT License](LICENSE) · Built by **Mohd Anzar** ([@anzar-hue](https://github.com/anzar-hue)).

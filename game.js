@@ -8,67 +8,166 @@ const SafeStorage = {
   }
 };
 
+// --- TUNING CONSTANTS ---
+const MODEL_YAW_OFFSET = 0; // Fixes backwards-walking Mixamo models
+const MOOD_GAIN = 1.8;            // Scales positive Curiosity/Aggression deltas
+const gain = (d) => (d > 0 ? d * MOOD_GAIN : d);
+
 // --- PROCEDURAL + SPOKEN VOICE AUDIO ENGINE ---
 const VOICE_BASE = "assets/audio/";
 
 const SFX = {
   ctx: null,
   currentVoice: null,
+  voiceQueue: [],
+  menuNodes: null,
+  menuGain: null,
+  menuAudio: null,
+  menuFadeTimer: null,
+  startMenuAmbience() {
+    this.init();
+    if (this.menuAudio) return;
+
+    const audio = new Audio(`${VOICE_BASE}menu_theme.mp3`);
+    audio.loop = true;
+    audio.volume = 0.01;
+    audio.play().catch(() => {});
+    this.menuAudio = audio;
+
+    // Smooth fade-in to 45% volume
+    if (this.menuFadeTimer) clearInterval(this.menuFadeTimer);
+    this.menuFadeTimer = setInterval(() => {
+      if (!this.menuAudio) return clearInterval(this.menuFadeTimer);
+      if (this.menuAudio.volume < 0.45) {
+        this.menuAudio.volume = Math.min(0.45, this.menuAudio.volume + 0.03);
+      } else {
+        clearInterval(this.menuFadeTimer);
+      }
+    }, 80);
+  },
+  stopMenuAmbience() {
+    if (!this.menuAudio) return;
+    const audio = this.menuAudio;
+    this.menuAudio = null;
+
+    if (this.menuFadeTimer) clearInterval(this.menuFadeTimer);
+    this.menuFadeTimer = setInterval(() => {
+      if (audio.volume > 0.03) {
+        audio.volume = Math.max(0, audio.volume - 0.03);
+      } else {
+        audio.pause();
+        audio.currentTime = 0;
+        clearInterval(this.menuFadeTimer);
+      }
+    }, 60);
+  },
+  chaseAudio: null,
+  startChaseTheme() {
+    if (this.chaseAudio) return;
+    const audio = new Audio(`${VOICE_BASE}chase_theme.mp3`);
+    audio.loop = true;
+    audio.volume = 0.55;
+    audio.play().catch(() => {});
+    this.chaseAudio = audio;
+  },
+  stopChaseTheme() {
+    if (!this.chaseAudio) return;
+    this.chaseAudio.pause();
+    this.chaseAudio.currentTime = 0;
+    this.chaseAudio = null;
+  },
+  playUIClick() {
+    if (!this.ctx) return;
+    const now = this.ctx.currentTime;
+    const osc = this.ctx.createOscillator();
+    const g = this.ctx.createGain();
+    osc.type = "triangle";
+    osc.frequency.setValueAtTime(180, now);
+    osc.frequency.exponentialRampToValueAtTime(55, now + 0.08);
+    g.gain.setValueAtTime(0.12, now);
+    g.gain.exponentialRampToValueAtTime(0.001, now + 0.09);
+    osc.connect(g); g.connect(this.ctx.destination);
+    osc.start(now); osc.stop(now + 0.1);
+  },
   init() {
     if (!this.ctx) this.ctx = new (window.AudioContext || window.webkitAudioContext)();
     if (this.ctx.state === "suspended") this.ctx.resume();
   },
-  playVoice(filename, volume = 0.85) {
+  playVoice(filename, volume = 0.85, priority = false) {
     if (!filename) return;
-    if (this.currentVoice) {
-      this.currentVoice.pause();
-      this.currentVoice.currentTime = 0;
+    const clampedVol = Math.max(0.05, Math.min(1.0, volume));
+
+    if (priority) {
+      this.voiceQueue = [];
+      if (this.currentVoice) {
+        this.currentVoice.onended = null;
+        this.currentVoice.onerror = null;
+        this.currentVoice.pause();
+        this.currentVoice = null;
+      }
+    } else if (this.currentVoice) {
+      // Queue up to 2 ambient lines so nothing gets cut off or backlogged
+      if (this.voiceQueue.length < 2) {
+        this.voiceQueue.push({ filename, volume: clampedVol });
+      }
+      return;
     }
+
     const audio = new Audio(`${VOICE_BASE}${filename}`);
-    audio.volume = Math.max(0.05, Math.min(1.0, volume));
-    audio.play().catch(() => {});
+    audio.volume = clampedVol;
+    const playNext = () => {
+      if (this.currentVoice !== audio) return;
+      this.currentVoice = null;
+      if (this.voiceQueue.length > 0) {
+        const next = this.voiceQueue.shift();
+        this.playVoice(next.filename, next.volume, false);
+      }
+    };
+    audio.onended = playNext;
+    audio.onerror = playNext;
     this.currentVoice = audio;
+    audio.play().catch(playNext);
   },
   playHeartbeat(intensity = 0.5) {
     if (!this.ctx) return;
     const now = this.ctx.currentTime;
     [0, 0.16].forEach((offset, idx) => {
       const osc = this.ctx.createOscillator();
-      const gain = this.ctx.createGain();
+      const gainNode = this.ctx.createGain();
       osc.type = "sine";
       osc.frequency.setValueAtTime(idx === 0 ? 58 : 48, now + offset);
       osc.frequency.exponentialRampToValueAtTime(28, now + offset + 0.12);
-      gain.gain.setValueAtTime(0.14 * intensity, now + offset);
-      gain.gain.exponentialRampToValueAtTime(0.001, now + offset + 0.13);
-      osc.connect(gain); gain.connect(this.ctx.destination);
+      gainNode.gain.setValueAtTime(0.14 * intensity, now + offset);
+      gainNode.gain.exponentialRampToValueAtTime(0.001, now + offset + 0.13);
+      osc.connect(gainNode); gainNode.connect(this.ctx.destination);
       osc.start(now + offset); osc.stop(now + offset + 0.14);
     });
   },
   playStep(silent = false) {
     if (!this.ctx || silent) return;
     const osc = this.ctx.createOscillator();
-    const gain = this.ctx.createGain();
+    const gainNode = this.ctx.createGain();
     osc.type = "triangle";
     osc.frequency.setValueAtTime(88 + Math.random() * 20, this.ctx.currentTime);
     osc.frequency.exponentialRampToValueAtTime(32, this.ctx.currentTime + 0.07);
-    gain.gain.setValueAtTime(0.06, this.ctx.currentTime);
-    gain.gain.exponentialRampToValueAtTime(0.001, this.ctx.currentTime + 0.08);
-    osc.connect(gain); gain.connect(this.ctx.destination);
+    gainNode.gain.setValueAtTime(0.06, this.ctx.currentTime);
+    gainNode.gain.exponentialRampToValueAtTime(0.001, this.ctx.currentTime + 0.08);
+    osc.connect(gainNode); gainNode.connect(this.ctx.destination);
     osc.start(); osc.stop(this.ctx.currentTime + 0.08);
   },
   playCreak() {
     if (!this.ctx) return;
     const now = this.ctx.currentTime;
     const osc = this.ctx.createOscillator();
-    const gain = this.ctx.createGain();
+    const gainNode = this.ctx.createGain();
     osc.type = "sawtooth";
     osc.frequency.setValueAtTime(145, now);
     osc.frequency.linearRampToValueAtTime(82, now + 0.22);
     osc.frequency.linearRampToValueAtTime(120, now + 0.36);
     osc.frequency.exponentialRampToValueAtTime(48, now + 0.6);
-    gain.gain.setValueAtTime(0.15, now);
-    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.62);
-    osc.connect(gain); gain.connect(this.ctx.destination);
+    gainNode.gain.setValueAtTime(0.15, now);
+    gainNode.gain.exponentialRampToValueAtTime(0.001, now + 0.62);
+    osc.connect(gainNode); gainNode.connect(this.ctx.destination);
     osc.start(now); osc.stop(now + 0.63);
   },
   playPickup() {
@@ -76,12 +175,12 @@ const SFX = {
     const now = this.ctx.currentTime;
     [440, 622].forEach((freq, idx) => {
       const osc = this.ctx.createOscillator();
-      const gain = this.ctx.createGain();
+      const gainNode = this.ctx.createGain();
       osc.type = "sine";
       osc.frequency.setValueAtTime(freq, now + idx * 0.09);
-      gain.gain.setValueAtTime(0.11, now + idx * 0.09);
-      gain.gain.exponentialRampToValueAtTime(0.001, now + idx * 0.09 + 0.28);
-      osc.connect(gain); gain.connect(this.ctx.destination);
+      gainNode.gain.setValueAtTime(0.11, now + idx * 0.09);
+      gainNode.gain.exponentialRampToValueAtTime(0.001, now + idx * 0.09 + 0.28);
+      osc.connect(gainNode); gainNode.connect(this.ctx.destination);
       osc.start(now + idx * 0.09); osc.stop(now + idx * 0.09 + 0.29);
     });
   },
@@ -89,13 +188,13 @@ const SFX = {
     if (!this.ctx) return;
     const now = this.ctx.currentTime;
     const osc = this.ctx.createOscillator();
-    const gain = this.ctx.createGain();
+    const gainNode = this.ctx.createGain();
     osc.type = "sawtooth";
     osc.frequency.setValueAtTime(560, now);
     osc.frequency.exponentialRampToValueAtTime(45, now + 0.24);
-    gain.gain.setValueAtTime(0.26, now);
-    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.25);
-    osc.connect(gain); gain.connect(this.ctx.destination);
+    gainNode.gain.setValueAtTime(0.26, now);
+    gainNode.gain.exponentialRampToValueAtTime(0.001, now + 0.25);
+    osc.connect(gainNode); gainNode.connect(this.ctx.destination);
     osc.start(now); osc.stop(now + 0.26);
   }
 };
@@ -139,6 +238,7 @@ let spotCooldown = 0;
 let lightAlertCooldown = 0;
 let activeNPC = null;
 let nearbyItem = null;
+let nearbyHideSpot = null;
 let nearMainDoor = false;
 let lockdownStrikes = 0;
 let lockdown = false;
@@ -148,19 +248,52 @@ let heartbeatTimer = 0;
 let creakCooldown = 0;
 let meetingCooldown = 0;
 let lockdownTrackTimer = 0;
+let stairWarnCooldown = 0;
+let introSeen = SafeStorage.get("woods_intro_seen", "0") === "1";
+let introStep = 0;
+let introStepTimer = 0;
+
+const STAIR_LINES = [
+  "It would be better if you go back down and sit like a good boy.",
+  "The upstairs is off-limits, dear. Step down before I lose my patience.",
+  "Don't test me on those stairs. Get back to the ground floor.",
+  "Why are you hovering on the staircase? Go downstairs where you belong.",
+  "One more step up and we're going to have a problem. Down. Now."
+];
+
+const MISSING_ITEM_TEXT = {
+  watch_arthur:  "Wait... where is my pocket watch? It was right here on the dresser.",
+  watch_eleanor: "Arthur's pocket watch is gone... someone has been in the guest room.",
+  photo_arthur:  "The family photo is missing. Who the hell touched our things?",
+  photo_eleanor: "Our family photo... it's gone from the master bedroom!"
+};
 let npcsKnowItemsMissing = false;
 let playerMissingFromFloor1 = false;
 let lastNoticedItem = null;
 let lastHudKey = "";
 
+// Live AI Telemetry State ([Tab])
+let telemetryVisible = false;
+let telemetryTimer = 0;
+let smoothedFps = 60;
+let lastModelSource = "Standby";
+let lastOnnxInputs = null;
+let lastOnnxDeltas = null;
+
+// Hiding & Lean State
+let currentHideSpot = null;
+let savedHideExit = null;
+let leanAmount = 0; // -1 (left) to +1 (right)
+
 const usedPlayerLines = new Set();
 const usedNpcLineIds = new Set();
+const usedStairLines = new Set();
 const usedNormalMeetings = new Set();
 const usedMissingMeetings = new Set();
 
 const player = {
   x: 0, y: 0, z: 11.5,
-  vy: 0, onGround: true, crouching: false,
+  vy: 0, onGround: true, crouching: false, hiding: false,
   yaw: 0, pitch: 0,
   walkSpeed: 5.2, crouchSpeed: 2.8, stealth: 0.72, itemsStolen: 0
 };
@@ -171,6 +304,7 @@ scene.background = new THREE.Color(0x020205);
 scene.fog = new THREE.FogExp2(0x020205, 0.078);
 
 const camera = new THREE.PerspectiveCamera(72, window.innerWidth / window.innerHeight, 0.1, 75);
+camera.rotation.order = "YXZ";
 const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.25));
@@ -198,7 +332,7 @@ scene.add(alarmLight);
 
 const flashlight = new THREE.SpotLight(0xfff1cc, 3.4, 21, Math.PI / 5.5, 0.62, 1.25);
 const flashTarget = new THREE.Object3D();
-flashTarget.position.set(0, 0, -1);
+flashTarget.position.set(0, 0.18, -1); // Slightly raised beam
 camera.add(flashlight);
 camera.add(flashTarget);
 flashlight.target = flashTarget;
@@ -239,7 +373,6 @@ function addBox(w, h, d, x, y, z, mat, solid = true, blocksLOS = true) {
       minX: x - w / 2 - 0.34, maxX: x + w / 2 + 0.34,
       minZ: z - d / 2 - 0.34, maxZ: z + d / 2 + 0.34,
       minY: y - h / 2, maxY: y + h / 2,
-      // Exact visual bounds for C++ LOS raycast
       losMinX: x - w / 2, losMaxX: x + w / 2,
       losMinY: y - h / 2, losMaxY: y + h / 2,
       losMinZ: z - d / 2, losMaxZ: z + d / 2,
@@ -312,6 +445,131 @@ function addFramedPainting(x, y, z, rotY = 0) {
   scene.add(g);
 }
 
+// ===== DECOR PROPS (non-stealable, cheap Lambert materials for Iris Xe) =====
+const L = (c, e) => new THREE.MeshLambertMaterial(e ? { color: c, emissive: e } : { color: c });
+const PM = {
+  rugRed: L(0x5a1a1f), rugBlue: L(0x22303d), rugGreen: L(0x2e3a2a),
+  pot: L(0x6b4a2f), leaf: L(0x2f5a30), white: L(0xcfcac2), counter: L(0x4a4a50),
+  stone: L(0x55524e), ember: L(0xff5a1a, 0xff3a00), shade: L(0xc9a86a, 0x6b4a1a),
+  flame: L(0xffc060, 0xffa030), metal: L(0x3a3a40), crate: L(0x6a5030), leather: L(0x3a2218)
+};
+
+function solidAABB(x, y, z, w, h, d) {
+  colliders.push({
+    minX: x - w / 2 - 0.34, maxX: x + w / 2 + 0.34,
+    minZ: z - d / 2 - 0.34, maxZ: z + d / 2 + 0.34,
+    minY: y, maxY: y + h, blocksLOS: false
+  });
+}
+function addRug(x, y, z, w, d, mat) { addBox(w, 0.02, d, x, y + 0.012, z, mat, false); }
+
+function addPlant(x, y, z) {
+  const pot = new THREE.Mesh(new THREE.CylinderGeometry(0.26, 0.2, 0.42, 10), PM.pot);
+  pot.position.set(x, y + 0.21, z);
+  const leaves = new THREE.Mesh(new THREE.SphereGeometry(0.4, 10, 8), PM.leaf);
+  leaves.position.set(x, y + 0.82, z);
+  scene.add(pot, leaves);
+  solidAABB(x, y, z, 0.6, 1.3, 0.6);
+}
+function addFloorLamp(x, y, z) {
+  addBox(0.3, 0.04, 0.3, x, y + 0.02, z, PM.metal, false);
+  addBox(0.05, 1.5, 0.05, x, y + 0.75, z, PM.metal, false);
+  addBox(0.35, 0.28, 0.35, x, y + 1.6, z, PM.shade, false);
+  solidAABB(x, y, z, 0.35, 1.7, 0.35);
+}
+function addCandle(x, y, z) {
+  addBox(0.06, 0.3, 0.06, x, y + 0.15, z, goldTrimMat, false);
+  addBox(0.05, 0.08, 0.05, x, y + 0.34, z, PM.flame, false);
+}
+function addWardrobe(x, y, z, facing = 1, w = 1.7, d = 0.75, h = 2.3) {
+  addBox(w, h, d, x, y + h / 2, z, darkWoodMat, true, true);
+  const fz = z + facing * (d / 2 + 0.02);
+  addBox(0.05, 0.3, 0.04, x - 0.12, y + h / 2, fz, goldTrimMat, false);
+  addBox(0.05, 0.3, 0.04, x + 0.12, y + h / 2, fz, goldTrimMat, false);
+  addBox(0.03, h - 0.2, 0.03, x, y + h / 2, z + facing * (d / 2 + 0.01), PM.metal, false);
+}
+function addDresser(x, y, z, facing = 1, w = 1.8, d = 0.6) {
+  addBox(w, 0.9, d, x, y + 0.45, z, darkWoodMat, true, false);
+  addBox(w + 0.08, 0.05, d + 0.08, x, y + 0.925, z, PM.leather, false);
+  for (let i = 0; i < 3; i++) addBox(0.25, 0.04, 0.04, x, y + 0.2 + i * 0.27, z + facing * (d / 2 + 0.02), goldTrimMat, false);
+}
+function addArmchair(x, y, z, facing = 1) {
+  addBox(0.95, 0.4, 0.9, x, y + 0.3, z, cushionMat, false);
+  addBox(0.95, 0.7, 0.2, x, y + 0.75, z - facing * 0.38, cushionMat, false);
+  addBox(0.18, 0.5, 0.9, x - 0.5, y + 0.45, z, cushionMat, false);
+  addBox(0.18, 0.5, 0.9, x + 0.5, y + 0.45, z, cushionMat, false);
+  solidAABB(x, y, z, 1.2, 1.1, 1.0);
+}
+function addTrunk(x, y, z) {
+  addBox(1.2, 0.55, 0.7, x, y + 0.275, z, PM.crate, true, false);
+  addBox(1.24, 0.06, 0.74, x, y + 0.58, z, goldTrimMat, false);
+}
+function addCrates(x, y, z) {
+  addBox(0.8, 0.8, 0.8, x, y + 0.4, z, PM.crate, true, false);
+  addBox(0.6, 0.6, 0.6, x + 0.1, y + 1.1, z - 0.05, PM.crate, false);
+}
+function addGrandfatherClock(x, y, z) {
+  addBox(0.7, 2.3, 0.45, x, y + 1.15, z, darkWoodMat, true, true);
+  addBox(0.4, 0.4, 0.05, x, y + 1.85, z + 0.24, PM.shade, false);
+  addBox(0.12, 0.9, 0.04, x, y + 0.9, z + 0.24, goldTrimMat, false);
+}
+function addFireplace(x, y, z) {
+  addBox(0.7, 1.5, 2.2, x, y + 0.75, z, PM.stone, true, false);
+  addBox(0.85, 0.12, 2.5, x + 0.05, y + 1.56, z, darkWoodMat, false);
+  addBox(0.1, 0.8, 1.2, x + 0.38, y + 0.55, z, PM.ember, false);
+}
+
+function addDecorProps() {
+  const U = 4.1;
+  // Ground Floor
+  addRug(5.5, 0, 5.0, 5.0, 3.4, PM.rugRed);
+  addRug(-9.5, 0, 7.8, 4.2, 3.0, PM.rugBlue);
+  addRug(-9.2, 0, -6.5, 4.4, 2.8, PM.rugGreen);
+  addCandle(-10.4, 0.86, -6.5);
+  addCandle(-8.0, 0.86, -6.5);
+  addPlant(-3.0, 0, 13.0);
+  addPlant(3.0, 0, 13.0);
+  addBox(5.2, 0.9, 0.9, 6.0, 0.45, -13.25, darkWoodMat, true, false);
+  addBox(5.3, 0.06, 1.0, 6.0, 0.93, -13.25, PM.counter, false);
+  addBox(1.1, 2.1, 0.9, 9.5, 1.05, -13.25, PM.white, true, true);
+  addDresser(-5.4, 0, -13.4, 1);
+  addGrandfatherClock(-3.0, 0, -13.3);
+  addFireplace(-13.45, 0, 11.5);
+  addArmchair(-5.0, 0, 4.2, -1);
+  addBox(0.7, 0.6, 0.7, -12.3, 0.3, 8.8, darkWoodMat, true, false);
+  addFloorLamp(-13.0, 0, 6.2);
+  addFramedPainting(-8, 2.4, 13.72, Math.PI);
+  addFramedPainting(8, 2.4, 13.72, Math.PI);
+  addFramedPainting(-5.4, 2.6, -13.72, 0);
+  addFramedPainting(1.5, 2.4, -13.72, 0);
+
+  // Upper Floor
+  addRug(6.0, U, 9.0, 4.4, 3.2, PM.rugBlue);
+  addDresser(6.0, U, 13.4, -1);
+  addWardrobe(12.8, U, 13.3, -1);
+  addTrunk(3.6, U, 12.9);
+  addRug(6.0, U, 0.0, 3.0, 3.0, PM.rugRed);
+  addPlant(3.2, U, -3.0);
+  addFloorLamp(8.8, U, 3.0);
+  addDresser(8.8, U, -13.3, 1);
+  addRug(9.0, U, -8.0, 3.0, 2.2, PM.rugGreen);
+  addGrandfatherClock(0.5, U, -13.3);
+  addPlant(-3.3, U, 12.6);
+  addFramedPainting(1.77, 6.3, -9, -Math.PI / 2);
+  addFramedPainting(1.77, 6.3, 9, -Math.PI / 2);
+  addFramedPainting(-4.77, 6.3, -4, Math.PI / 2);
+  addFramedPainting(4.0, 6.3, -13.72, 0);
+  addFramedPainting(-6.5, 6.3, -13.72, 0);
+  addFramedPainting(-8, 6.3, 13.72, Math.PI);
+  addFramedPainting(6, 6.3, 13.72, Math.PI);
+  addArmchair(-6.6, U, 12.4, -1);
+  addRug(-9.0, U, 8.0, 4.0, 3.0, PM.rugRed);
+  addFloorLamp(-6.3, U, 3.4);
+  addTrunk(-12.6, U, -8.9);
+  addCandle(-12.9, U + 0.61, -8.9);
+  addCrates(-6.2, U, -13.0);
+}
+
 function buildHouseAndFurniture() {
   addBox(28, 0.2, 28, 0, -0.1, 0, floorMat, false);
   addBox(28, 0.2, 28, 0, 8.1, 0, ceilingMat, false);
@@ -344,7 +602,7 @@ function buildHouseAndFurniture() {
   }
   addBox(0.2, 3.4, 10.0, 9.8, 1.7, 0.8, stairMat, true, true);
 
-  // Interior Walls (block LOS!)
+  // Interior Walls
   addBox(0.3, 4, 9, -2, 2, -9.5, wallMat, true, true);
   addBox(0.3, 4, 8, -2, 2, 5, wallMat, true, true);
   addBox(0.3, 4, 10, 2, 6, -9, upperWallMat, true, true);
@@ -358,7 +616,6 @@ function buildHouseAndFurniture() {
   addChair(-8.6, 0, -7.7, 1);
   addChair(-9.8, 0, -5.3, -1);
   addChair(-8.6, 0, -5.3, -1);
-
   addSofa(-9.5, 0, 8.8);
   addTable(-9.5, 0, 6.8, 1.6, 0.8, 0.45);
   addBookshelf(-13.4, 0, 3.5);
@@ -373,6 +630,8 @@ function buildHouseAndFurniture() {
   addBookshelf(-13.4, 4.1, 6.5);
   addBox(0.9, 0.95, 0.9, -11.8, 4.575, -11.8, darkWoodMat, true, false);
   addFramedPainting(-13.72, 6.1, -7.0, Math.PI / 2);
+
+  addDecorProps();
 }
 buildHouseAndFurniture();
 
@@ -386,7 +645,14 @@ function syncCollidersToWASM() {
   }
 }
 
-// --- CUSTOM 3D ITEMS ---
+// --- UPSTAIRS HIDING SPOTS ---
+const HIDING_SPOTS = [
+  { id: "wardrobe", name: "Guest Room Wardrobe", x: 12.2, y: 4.1, z: 12.1, hideX: 12.8, hideY: 4.1, hideZ: 12.6, lookYaw: Math.PI },
+  { id: "desk",     name: "Under Study Desk",    x: -11.5, y: 4.1, z: 10.0, hideX: -11.5, hideY: 4.1, hideZ: 11.2, lookYaw: 0 },
+  { id: "crates",   name: "Behind NW Crates",    x: -6.2, y: 4.1, z: -11.5, hideX: -6.2, hideY: 4.1, hideZ: -12.1, lookYaw: 0 }
+];
+
+// --- CUSTOM 3D ITEMS (5 ARTIFACTS) ---
 function createCustomItemMesh(type, x, y, z) {
   const group = new THREE.Group();
   const goldMat = new THREE.MeshStandardMaterial({ color: 0xe3b341, emissive: 0x5c4208, metalness: 0.85, roughness: 0.2 });
@@ -403,6 +669,17 @@ function createCustomItemMesh(type, x, y, z) {
     const pages = new THREE.Mesh(new THREE.BoxGeometry(0.38, 0.08, 0.52), new THREE.MeshStandardMaterial({ color: 0xe6dec5 }));
     pages.position.x = 0.02;
     group.add(cover, pages);
+  } else if (type === "watch") {
+    const ring = new THREE.Mesh(new THREE.TorusGeometry(0.13, 0.025, 10, 20), goldMat);
+    const face = new THREE.Mesh(new THREE.CylinderGeometry(0.11, 0.11, 0.03, 20), new THREE.MeshStandardMaterial({ color: 0xe6dec5 }));
+    face.rotation.x = Math.PI / 2;
+    const crown = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.025, 0.06, 8), goldMat);
+    crown.position.y = 0.17;
+    group.add(ring, face, crown);
+  } else if (type === "photo") {
+    const frame = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.42, 0.04), goldMat);
+    const pic = new THREE.Mesh(new THREE.BoxGeometry(0.26, 0.34, 0.05), new THREE.MeshStandardMaterial({ color: 0x2a2320, roughness: 0.9 }));
+    group.add(frame, pic);
   } else {
     const body = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.18, 0.06, 20), goldMat); body.rotation.x = Math.PI / 2;
     const gem = new THREE.Mesh(new THREE.OctahedronGeometry(0.07, 0), new THREE.MeshStandardMaterial({ color: 0xd93838, emissive: 0x590d0d }));
@@ -415,7 +692,7 @@ function createCustomItemMesh(type, x, y, z) {
   return group;
 }
 
-// --- 2-FLOOR CONNECTED NAVIGATION GRAPH ---
+// --- 2-FLOOR CONNECTED NAVIGATION GRAPH + WEIGHTED A* ---
 const NAV_NODES = [
   { id: 0,  x: 12.0, y: 4.1,  z: -8.0,  neighbors: [1, 9] },
   { id: 1,  x:  6.0, y: 4.1,  z: -8.0,  neighbors: [0, 2] },
@@ -438,6 +715,11 @@ const NAV_NODES = [
 const FLOOR2_PATROL_NODES = [1, 2, 3, 4, 5, 6, 7, 8];
 const FLOOR1_CHECK_NODES = [12, 14, 15];
 
+function nodeDist(a, b) {
+  const na = NAV_NODES[a], nb = NAV_NODES[b];
+  return Math.hypot(na.x - nb.x, (na.y - nb.y) * 1.5, na.z - nb.z);
+}
+
 function findNearestNode(x, y, z) {
   let best = 0, bestDist = Infinity;
   for (const n of NAV_NODES) {
@@ -447,18 +729,33 @@ function findNearestNode(x, y, z) {
   return best;
 }
 
-function findPathBFS(startId, goalId) {
+// Euclidean-Weighted A* Pathfinding
+function findPathAStar(startId, goalId) {
   if (startId === goalId) return [goalId];
-  const queue = [[startId]];
-  const visited = new Set([startId]);
-  while (queue.length > 0) {
-    const path = queue.shift();
-    const curr = path[path.length - 1];
+  const open = new Set([startId]);
+  const cameFrom = new Map();
+  const gScore = new Map([[startId, 0]]);
+  const fScore = new Map([[startId, nodeDist(startId, goalId)]]);
+
+  while (open.size > 0) {
+    let curr = -1, bestF = Infinity;
+    for (const id of open) {
+      const f = fScore.get(id) ?? Infinity;
+      if (f < bestF) { bestF = f; curr = id; }
+    }
+    if (curr === goalId) {
+      const path = [curr];
+      while (cameFrom.has(curr)) { curr = cameFrom.get(curr); path.unshift(curr); }
+      return path;
+    }
+    open.delete(curr);
     for (const next of NAV_NODES[curr].neighbors) {
-      if (next === goalId) return [...path, next];
-      if (!visited.has(next)) {
-        visited.add(next);
-        queue.push([...path, next]);
+      const tentativeG = (gScore.get(curr) ?? Infinity) + nodeDist(curr, next);
+      if (tentativeG < (gScore.get(next) ?? Infinity)) {
+        cameFrom.set(next, curr);
+        gScore.set(next, tentativeG);
+        fScore.set(next, tentativeG + nodeDist(next, goalId));
+        open.add(next);
       }
     }
   }
@@ -466,12 +763,13 @@ function findPathBFS(startId, goalId) {
 }
 
 function lerpAngle(current, target, alpha) {
-  let diff = ((target - current + Math.PI) % (Math.PI * 2)) - Math.PI;
-  if (diff < -Math.PI) diff += Math.PI * 2;
+  let diff = target - current;
+  while (diff > Math.PI) diff -= Math.PI * 2;
+  while (diff < -Math.PI) diff += Math.PI * 2;
   return current + diff * alpha;
 }
 
-// --- MIXAMO GLB + CACHING (LOADED ONCE, REUSED ON RESET) ---
+// --- MIXAMO GLB + CACHING ---
 function createFallbackRig(coatColor, isFemale) {
   const group = new THREE.Group();
   const coatMat = new THREE.MeshStandardMaterial({ color: coatColor, roughness: 0.75 });
@@ -557,6 +855,7 @@ function attachMixamoModel(npc, modelPath) {
       npc.rig.leftLegPivot.visible = false;
       npc.rig.rightLegPivot.visible = false;
 
+      model.rotation.y = MODEL_YAW_OFFSET; // Fixes backwards-walking Mixamo models
       npc.rig.group.add(model);
       npc.glbModel = model;
 
@@ -588,7 +887,7 @@ function generateCreakySpots() {
 
 function assignNewPath(npc, targetNodeId) {
   const startNode = findNearestNode(npc.x, npc.y, npc.z);
-  const path = findPathBFS(startNode, targetNodeId);
+  const path = findPathAStar(startNode, targetNodeId);
   npc.path = path.length > 1 ? path.slice(1) : path;
 }
 
@@ -603,6 +902,7 @@ function initNPCsOnce() {
 }
 
 function resetWorld() {
+  SFX.stopChaseTheme();
   items.forEach(it => scene.remove(it.mesh));
   usedPlayerLines.clear();
   usedNpcLineIds.clear();
@@ -611,9 +911,12 @@ function resetWorld() {
 
   const cfg = MODES[selectedMode];
   player.x = 0; player.y = 0; player.z = 11.5;
-  player.vy = 0; player.onGround = true; player.crouching = false;
+  player.vy = 0; player.onGround = true; player.crouching = false; player.hiding = false;
   player.yaw = 0; player.pitch = 0;
   player.itemsStolen = 0;
+  currentHideSpot = null;
+  savedHideExit = null;
+  leanAmount = 0;
   flashlightOn = true;
   flashlight.intensity = 3.4;
   lockdownStrikes = 0;
@@ -623,6 +926,7 @@ function resetWorld() {
   creakCooldown = 0;
   meetingCooldown = 0;
   lockdownTrackTimer = 0;
+  stairWarnCooldown = 0; usedStairLines.clear();
   npcsKnowItemsMissing = false;
   playerMissingFromFloor1 = false;
   lastNoticedItem = null;
@@ -630,6 +934,8 @@ function resetWorld() {
   alarmLight.intensity = 0;
   ambientLight.color.setHex(0x181c28);
   mainDoorPivot.rotation.y = 0;
+  camera.fov = 72;
+  camera.updateProjectionMatrix();
   document.getElementById("damage-flash").style.background = "rgba(160,0,0,0)";
   document.getElementById("alert-feed").classList.add("hidden");
 
@@ -638,7 +944,9 @@ function resetWorld() {
   items = [
     { id: "key",    name: "Silver Key",    type: "key",    x: -11.8, y: 5.3,  z: -11.8, stolen: false, noticedMissing: false },
     { id: "ledger", name: "Secret Ledger", type: "ledger", x: -11.5, y: 5.15, z:  11.4, stolen: false, noticedMissing: false },
-    { id: "locket", name: "Gold Locket",   type: "locket", x:   6.0, y: 5.15, z: -12.2, stolen: false, noticedMissing: false }
+    { id: "locket", name: "Gold Locket",   type: "locket", x:   6.0, y: 5.15, z: -12.2, stolen: false, noticedMissing: false },
+    { id: "watch",  name: "Pocket Watch",  type: "watch",  x:   6.0, y: 5.25, z:  13.4, stolen: false, noticedMissing: false },
+    { id: "photo",  name: "Family Photo",  type: "photo",  x:   8.8, y: 5.28, z: -13.3, stolen: false, noticedMissing: false }
   ];
   items.forEach(it => { it.mesh = createCustomItemMesh(it.type, it.x, it.y, it.z); });
 
@@ -648,13 +956,13 @@ function resetWorld() {
     x: 6.0, y: 4.1, z: -8.0, speed: cfg.npcSpeed, range: 4.2,
     path: [2, 4], pauseTimer: 0, mood: [0.5, 0.1, 0.1],
     checkingFloor1: false, sawPlayerOnFloor1: false, floor1Cooldown: 14.0,
-    investigateTimer: 0, meetingTimer: 0
+    investigateTimer: 0, meetingTimer: 0, stairStopTimer: 0, stairLineSpoken: false
   });
   Object.assign(npcs[1], {
     x: -9.0, y: 4.1, z: 7.5, speed: cfg.npcSpeed * 0.95, range: 4.2,
     path: [7, 4], pauseTimer: 0, mood: [0.5, 0.1, 0.1],
     checkingFloor1: false, sawPlayerOnFloor1: false, floor1Cooldown: 24.0,
-    investigateTimer: 0, meetingTimer: 0
+    investigateTimer: 0, meetingTimer: 0, stairStopTimer: 0, stairLineSpoken: false
   });
   npcs.forEach(n => {
     n.rig.group.position.set(n.x, n.y, n.z);
@@ -664,7 +972,7 @@ function resetWorld() {
   updateHUD(true);
 }
 
-// --- LOADING SEQUENCE (HARDENED WITH ERROR RECOVERY) ---
+// --- LOADING SEQUENCE ---
 async function runLoadingScreen() {
   state = "LOADING";
   document.getElementById("screen-title").classList.add("hidden");
@@ -677,7 +985,7 @@ async function runLoadingScreen() {
   try {
     if (!enginesLoaded) {
       if (typeof ort !== "undefined" && ort.env && ort.env.wasm) {
-        ort.env.wasm.numThreads = 1; // Required for HF Spaces (no COOP/COEP)
+        ort.env.wasm.numThreads = 1;
       }
 
       setProgress(20, "Loading dialogue script & animations...");
@@ -726,9 +1034,16 @@ async function runLoadingScreen() {
 
     setTimeout(() => {
       document.getElementById("screen-loading").classList.add("hidden");
-      state = "PLAYING";
-      animClock.getDelta(); // flush dt spike
-      safeLock();
+      animClock.getDelta();
+      SFX.stopMenuAmbience();
+
+      if (gameCount === 1 && !introSeen) {
+        startIntroCutscene();
+      } else {
+        state = "PLAYING";
+        showAlert("You have successfully entered their house with trust. Steal the items cautiously... death might be your ending.", "warn", 6000);
+        safeLock();
+      }
     }, 350);
   } catch (err) {
     console.error("Boot failed:", err);
@@ -736,16 +1051,20 @@ async function runLoadingScreen() {
   }
 }
 
-// --- HUD (DIRTY-FLAGGED FOR ZERO DOM THRASH) ---
+// --- HUD & VISIBILITY GEM ---
 function isMLActive() { return gameCount >= 5 && ortSession !== null; }
 function isUpstairs() { return player.y >= 2.8; }
+function isOnStairs() {
+  return player.x > 9.8 && player.x < 14.0 && player.z >= -6.2 && player.z <= 6.5 && player.y > 0.25 && player.y < 3.85;
+}
 function isDangerZone() { return lockdown || isUpstairs(); }
 
 function updateHUD(force = false) {
   const ref = activeNPC || npcs[0];
   const [t, c, a] = ref ? ref.mood.map(v => Math.round(v * 100)) : [50, 10, 10];
   const zoneCode = lockdown ? 2 : isUpstairs() ? 1 : 0;
-  const hudKey = `${gameCount}|${isMLActive()}|${player.itemsStolen}|${selectedMode}|${lockdownStrikes}|${zoneCode}|${t}|${c}|${a}`;
+  const visState = player.hiding ? 0 : (player.crouching && !flashlightOn) ? 1 : 2;
+  const hudKey = `${gameCount}|${isMLActive()}|${player.itemsStolen}/${items.length}|${selectedMode}|${lockdownStrikes}|${zoneCode}|${visState}|${t}|${c}|${a}`;
   if (!force && hudKey === lastHudKey) return;
   lastHudKey = hudKey;
 
@@ -754,9 +1073,21 @@ function updateHUD(force = false) {
   badge.className = isMLActive() ? "badge badge-ml" : "badge badge-rule";
 
   const cfg = MODES[selectedMode];
-  document.getElementById("items-count").textContent = `${player.itemsStolen} / 3`;
+  document.getElementById("items-count").textContent = `${player.itemsStolen} / ${items.length}`;
   document.getElementById("diff-label").textContent = cfg.label;
   document.getElementById("strikes-count").textContent = lockdown ? `${lockdownStrikes} / ${cfg.maxStrikes}` : "∞";
+
+  const gem = document.getElementById("vis-gem");
+  if (visState === 0) {
+    gem.innerHTML = "&#9670; HIDDEN";
+    gem.className = "vis-hidden";
+  } else if (visState === 1) {
+    gem.innerHTML = "&#9670; DIM";
+    gem.className = "vis-dim";
+  } else {
+    gem.innerHTML = "&#9670; VISIBLE";
+    gem.className = "vis-bright";
+  }
 
   const zone = document.getElementById("zone-label");
   if (lockdown) {
@@ -778,29 +1109,60 @@ function updateHUD(force = false) {
   document.getElementById("aggression-fill").style.width = `${a}%`;
 }
 
-// --- CREAKY FLOORBOARD BRAIN DECISION ---
+// --- LIVE AI & WASM TELEMETRY ([Tab]) ---
+function updateTelemetry() {
+  if (!telemetryVisible || !cppHasLOS || npcs.length < 2) return;
+  const losRows = npcs.map(n => {
+    const sameFl = Math.abs(player.y - n.y) < 1.8;
+    const clear = sameFl && cppHasLOS(n.x, n.y + 1.4, n.z, player.x, player.y + 1.15, player.z) === 1;
+    const dist = Math.hypot(player.x - n.x, player.z - n.z).toFixed(1);
+    return `<div class="tele-row"><span>${n.name} (${dist}m)</span><span class="${clear ? 'tele-warn' : 'tele-ok'}">${clear ? 'LOS CLEAR' : 'OCCLUDED'}</span></div>`;
+  }).join("");
+
+  const inStr = lastOnnxInputs ? `[${lastOnnxInputs.map(v => v.toFixed(2)).join(", ")}]` : "Trigger a confrontation";
+  const outStr = lastOnnxDeltas ? `T:${lastOnnxDeltas[0]} C:${lastOnnxDeltas[1]} A:${lastOnnxDeltas[2]}` : "—";
+
+  document.getElementById("tele-body").innerHTML = `
+    <div class="tele-row"><span>Engine</span><span class="tele-ok">${isMLActive() ? 'PyTorch ONNX' : 'C++ WASM Rules'}</span></div>
+    <div class="tele-row"><span>Last Eval</span><span>${lastModelSource}</span></div>
+    <div class="tele-row"><span>Perf (Iris Xe)</span><span class="tele-ok">${Math.round(smoothedFps)} FPS &middot; ${renderer.info.render.calls} draws</span></div>
+    ${losRows}
+    <div style="margin-top:6px; color:#8b949e;">9-Feature Input Tensor:</div>
+    <div style="word-break:break-all; color:#79c0ff;">${inStr}</div>
+    <div class="tele-row" style="margin-top:4px;"><span>Mood Deltas</span><span style="color:#f2cc60;">${outStr}</span></div>
+  `;
+}
+
+// --- WALL-ATTENUATED SOUND PROPAGATION ---
+function alertNPCsBySound(soundX, soundY, soundZ, baseRange, reasonLabel) {
+  const targetNode = findNearestNode(soundX, soundY, soundZ);
+  let alerted = [];
+  for (const npc of npcs) {
+    if (npc.meetingTimer > 0 || npc.checkingFloor1) continue;
+    const dist = Math.hypot(npc.x - soundX, npc.z - soundZ);
+    const sameFloor = Math.abs(npc.y - soundY) < 2.0;
+    const hasLOS = sameFloor && cppHasLOS(soundX, soundY + 1.0, soundZ, npc.x, npc.y + 1.4, npc.z) === 1;
+    // Walls dampen sound radius by 50%
+    const effectiveRange = hasLOS ? baseRange : baseRange * 0.52;
+    if (sameFloor && dist <= effectiveRange) {
+      assignNewPath(npc, targetNode);
+      npc.investigateTimer = 5.5;
+      npc.pauseTimer = 0;
+      alerted.push(npc.name);
+    }
+  }
+  if (alerted.length > 0) {
+    showAlert(`${reasonLabel} ${alerted.join(" & ")} heard it and is heading this way!`, "danger", 4200);
+  }
+  return alerted;
+}
+
 function handleCreakSound(soundX, soundZ) {
   SFX.playCreak();
   creakCooldown = 3.4;
-
-  const targetNode = findNearestNode(soundX, 4.1, soundZ);
-  let approachingNames = [];
-  for (const npc of npcs) {
-    if (npc.meetingTimer > 0) continue;
-    const dist = Math.hypot(npc.x - soundX, npc.z - soundZ);
-    const score = (npc.mood[1] * 0.65) + (npc.mood[2] * 0.45) + (npcsKnowItemsMissing ? 0.35 : 0) + (dist < 11 ? 0.25 : 0);
-    if (score >= 0.34) {
-      assignNewPath(npc, targetNode);
-      npc.investigateTimer = 5.5;
-      npc.checkingFloor1 = false;
-      approachingNames.push(npc.name);
-    }
-  }
-
-  if (approachingNames.length > 0) {
-    showAlert(`CREAK! ${approachingNames.join(" & ")} heard the floorboard and is approaching!`, "danger", 4200);
-  } else {
-    showAlert("CREAK! Wood groaned upstairs... no one came over.", "warn", 3200);
+  const heard = alertNPCsBySound(soundX, 4.1, soundZ, 14.0, "CREAK!");
+  if (heard.length === 0) {
+    showAlert("CREAK! Wood groaned upstairs... walls muffled the sound.", "warn", 3000);
   }
 }
 
@@ -827,11 +1189,7 @@ function pickBestFreshNpcLine(npc, choiceId) {
     if (score > bestScore) { bestScore = score; bestLine = line; }
   }
   usedNpcLineIds.add(bestLine.id);
-  const rawScore = cppEuclideanScore(
-    npc.mood[0], npc.mood[1], npc.mood[2],
-    bestLine.mood_vector[0], bestLine.mood_vector[1], bestLine.mood_vector[2]
-  );
-  return { id: bestLine.id, text: bestLine.text, score: rawScore };
+  return { id: bestLine.id, text: bestLine.text };
 }
 
 function pickFreshMeetingIndex(pool, usedSet) {
@@ -857,11 +1215,10 @@ function triggerKnifeAttack(npc, reasonText) {
   animTimer = 0;
   if (document.pointerLockElement) document.exitPointerLock();
   document.getElementById("screen-dialogue").classList.add("hidden");
-
   if (npc.mixer && sharedStabClip) setNPCClip(npc, sharedStabClip, true);
 }
 
-function startConfrontation(npc) {
+function startConfrontation(npc, customSub = null) {
   const cfg = MODES[selectedMode];
   if (lockdown) {
     lockdownStrikes += 1;
@@ -880,11 +1237,13 @@ function startConfrontation(npc) {
   document.getElementById("confront-title").textContent = lockdown
     ? `Spotted by ${npc.name}! (Escape Strike ${lockdownStrikes}/${cfg.maxStrikes})`
     : `Spotted by ${npc.name}!`;
-  document.getElementById("confront-sub").textContent = npcsKnowItemsMissing
-    ? `${npc.name} glares at you—they know ${lastNoticedItem || "an item"} is missing!`
-    : playerMissingFromFloor1
-      ? `${npc.name} noticed you weren't downstairs where you belong...`
-      : "Choose how to respond:";
+  document.getElementById("confront-sub").textContent = customSub
+    ? customSub
+    : npcsKnowItemsMissing
+      ? `${npc.name} glares at you—they know ${lastNoticedItem || "an item"} is missing!`
+      : playerMissingFromFloor1
+        ? `${npc.name} noticed you weren't downstairs where you belong...`
+        : "Choose how to respond:";
   document.getElementById("npc-reply").classList.add("hidden");
   document.getElementById("btn-continue").classList.add("hidden");
 
@@ -907,46 +1266,56 @@ async function handleChoice(npc, choiceId) {
   document.getElementById("choices-container").innerHTML = "";
   let dTrust = 0, dCur = 0, dAgg = 0;
 
+  const featureVec = [
+    isDangerZone() ? 1.0 : 0.0,
+    player.itemsStolen / items.length,
+    player.stealth,
+    choiceId / 2.0,
+    npc.mood[0],
+    npc.mood[1],
+    npc.mood[2],
+    npcsKnowItemsMissing ? 1.0 : 0.0,
+    playerMissingFromFloor1 ? 1.0 : 0.0
+  ];
+  lastOnnxInputs = featureVec;
+
   if (isMLActive()) {
     try {
-      const inputArr = Float32Array.from([
-        isDangerZone() ? 1.0 : 0.0,
-        player.itemsStolen / 3.0,
-        player.stealth,
-        choiceId / 2.0,
-        npc.mood[0],
-        npc.mood[1],
-        npc.mood[2],
-        npcsKnowItemsMissing ? 1.0 : 0.0,
-        playerMissingFromFloor1 ? 1.0 : 0.0
-      ]);
-      const tensor = new ort.Tensor("float32", inputArr, [1, 9]);
+      const tensor = new ort.Tensor("float32", Float32Array.from(featureVec), [1, 9]);
       const results = await ortSession.run({ player_state: tensor });
       const deltas = results.mood_deltas.data;
       [dTrust, dCur, dAgg] = [deltas[0], deltas[1], deltas[2]];
+      lastModelSource = "ONNX MLP";
     } catch (err) {
       console.warn("ONNX inference error, using C++ rule fallback:", err);
       dTrust = cppRuleDelta(choiceId, 0);
       dCur   = cppRuleDelta(choiceId, 1);
       dAgg   = cppRuleDelta(choiceId, 2);
+      lastModelSource = "C++ Fallback";
     }
   } else {
     dTrust = cppRuleDelta(choiceId, 0);
     dCur   = cppRuleDelta(choiceId, 1);
     dAgg   = cppRuleDelta(choiceId, 2);
+    lastModelSource = "C++ Rules";
   }
 
-  // Trust has real gameplay impact: high trust softens hostility; low trust amplifies it
+  // Trust modifier + MOOD_GAIN scaling
   if (npc.mood[0] > 0.7 && dAgg > 0) dAgg *= 0.75;
   if (npc.mood[0] < 0.25 && dAgg > 0) dAgg *= 1.25;
+
+  dCur = gain(dCur);
+  dAgg = gain(dAgg);
+  lastOnnxDeltas = [dTrust.toFixed(2), dCur.toFixed(2), dAgg.toFixed(2)];
 
   npc.mood[0] = Math.max(0, Math.min(1, npc.mood[0] + dTrust));
   npc.mood[1] = Math.max(0, Math.min(1, npc.mood[1] + dCur));
   npc.mood[2] = Math.max(0, Math.min(1, npc.mood[2] + dAgg));
   updateHUD(true);
+  updateTelemetry();
 
   const match = pickBestFreshNpcLine(npc, choiceId);
-  SFX.playVoice(`${npc.name.toLowerCase()}_${match.id}.mp3`, 0.9);
+  SFX.playVoice(`${npc.name.toLowerCase()}_${match.id}.mp3`, 0.9, true);
 
   const replyEl = document.getElementById("npc-reply");
   replyEl.textContent = `${npc.name}: "${match.text}"`;
@@ -955,6 +1324,7 @@ async function handleChoice(npc, choiceId) {
 }
 
 function endGame(title, desc) {
+  SFX.stopChaseTheme();
   state = "ENDED";
   keys = {};
   if (document.pointerLockElement) document.exitPointerLock();
@@ -978,9 +1348,41 @@ function hitsWall(nx, ny, nz) {
 }
 
 let elapsed = 0;
+function startIntroCutscene() {
+  state = "INTRO_ANIM";
+  animTimer = 0;
+  introStep = 0;
+  introStepTimer = 0;
+  mainDoorPivot.rotation.y = Math.PI * 0.52;
+  document.getElementById("blink-overlay").style.opacity = "0";
+
+  // Position Arthur & Eleanor in the foyer facing the front door
+  npcs[0].rig.group.position.set(-1.5, 0, 8.4);
+  npcs[0].rig.group.rotation.set(0, 0.22, 0);
+  npcs[1].rig.group.position.set(1.5, 0, 8.4);
+  npcs[1].rig.group.rotation.set(0, -0.22, 0);
+  npcs.forEach(n => { if (n.mixer && sharedIdleClip) setNPCClip(n, sharedIdleClip); });
+}
+
+function finishIntroCutscene() {
+  introSeen = true;
+  SafeStorage.set("woods_intro_seen", "1");
+  mainDoorPivot.rotation.y = 0;
+  document.getElementById("blink-overlay").style.opacity = "0";
+
+  // Return NPCs to their upstairs patrol starts
+  npcs[0].rig.group.position.set(npcs[0].x, npcs[0].y, npcs[0].z);
+  npcs[1].rig.group.position.set(npcs[1].x, npcs[1].y, npcs[1].z);
+  npcs.forEach(n => { if (n.mixer && n.walkClip) setNPCClip(n, n.walkClip); });
+
+  state = "PLAYING";
+  showAlert("You have successfully entered their house with trust. Steal the items cautiously... death might be your ending.", "warn", 6000);
+  safeLock();
+}
 function update() {
   const rawDt = animClock.getDelta();
-  const dt = Math.min(rawDt, 0.05); // Clamp dt to prevent tunneling on lag spikes
+  const dt = Math.min(rawDt, 0.05);
+  if (rawDt > 0) smoothedFps = smoothedFps * 0.9 + (1 / rawDt) * 0.1;
 
   if (state === "PAUSED") return;
 
@@ -992,6 +1394,46 @@ function update() {
   }
 
   downstairsLamp.intensity = 0.80 + Math.sin(elapsed * 9.0) * 0.08 + (Math.random() > 0.97 ? -0.35 : 0);
+  // --- ONE-TIME WELCOME CUTSCENE (GAME 1 — VOICE-SYNCED + BLINK) ---
+  if (state === "INTRO_ANIM") {
+    animTimer += dt;
+    introStepTimer += dt;
+
+    const stepIn = Math.min(1, animTimer / 2.2);
+    const camZ = 14.2 - stepIn * 2.7;
+    camera.position.set(0, 1.65 + Math.sin(animTimer * 6.0) * (stepIn < 1 ? 0.03 : 0.005), camZ);
+    camera.lookAt(0, 1.45, 8.4);
+
+    if (animTimer > 2.2) {
+      mainDoorPivot.rotation.y = Math.max(0, mainDoorPivot.rotation.y - 1.4 * dt);
+    }
+
+    // 1. Arthur speaks
+    if (introStep === 0 && animTimer >= 0.6) {
+      introStep = 1;
+      introStepTimer = 0;
+      SFX.playVoice("intro_arthur.mp3", 0.95, true);
+      showAlert('Arthur: "Lost in the woods at this hour? Come inside, get warm... just stay on the ground floor."  [Space to Skip]', "warn", 12000);
+    }
+    // 2. Wait until Arthur's audio finishes (+ brief beat), then Eleanor speaks
+    else if (introStep === 1 && ((!SFX.currentVoice && introStepTimer >= 1.5) || introStepTimer >= 12.0)) {
+      introStep = 2;
+      introStepTimer = 0;
+      SFX.playVoice("intro_eleanor.mp3", 0.95, true);
+      showAlert('Eleanor: "Make yourself at home, dear. And please... do not wander upstairs."  [Space to Skip]', "whisper", 12000);
+    }
+    // 3. Wait until Eleanor's audio finishes, then close eyes (blink to black)
+    else if (introStep === 2 && ((!SFX.currentVoice && introStepTimer >= 1.5) || introStepTimer >= 12.0)) {
+      introStep = 3;
+      introStepTimer = 0;
+      document.getElementById("blink-overlay").style.opacity = "1";
+    }
+    // 4. While eyes are closed, move NPCs upstairs, then blink open into gameplay
+    else if (introStep === 3 && introStepTimer >= 0.55) {
+      finishIntroCutscene();
+    }
+    return;
+  }
 
   // --- KNIFE ATTACK ANIMATION ---
   if (state === "KNIFE_ANIM") {
@@ -1025,7 +1467,7 @@ function update() {
     camera.position.set(player.x, 1.65, player.z);
     camera.lookAt(0, 1.65, 24);
     if (animTimer >= 1.6) {
-      endGame("Escaped!", "You stole all 3 artifacts and slipped out the front door into the woods.");
+      endGame("Escaped!", `You stole all ${items.length} artifacts and slipped out the front door into the woods.`);
     }
     return;
   }
@@ -1038,71 +1480,88 @@ function update() {
     ambientLight.color.setHex(0x3a1014);
   }
 
-  // Player Movement & Crouch
-  player.crouching = Boolean(keys["shift"]);
-  player.stealth = player.crouching ? 0.96 : 0.72;
-  const activeSpeed = player.crouching ? player.crouchSpeed : player.walkSpeed;
-
-  let forward = 0, strafe = 0;
-  if (keys["w"] || keys["arrowup"])    forward += 1;
-  if (keys["s"] || keys["arrowdown"])  forward -= 1;
-  if (keys["a"] || keys["arrowleft"])  strafe -= 1;
-  if (keys["d"] || keys["arrowright"]) strafe += 1;
-
-  const mag = Math.hypot(forward, strafe);
-  if (mag > 0) { forward /= mag; strafe /= mag; }
-  const isMoving = mag > 0;
-
-  const sinY = Math.sin(player.yaw);
-  const cosY = Math.cos(player.yaw);
-  const dx = (-sinY * forward + cosY * strafe) * activeSpeed * dt;
-  const dz = (-cosY * forward - sinY * strafe) * activeSpeed * dt;
-
-  if (!hitsWall(player.x + dx, player.y, player.z)) player.x += dx;
-  if (!hitsWall(player.x, player.y, player.z + dz)) player.z += dz;
-  if (player.z > 13.3) player.z = 13.3;
-
-  // Floor height + Jump + Gravity (dt-scaled)
-  let floorY = 0;
-  if (player.x > 10.2 && player.z >= -6.2 && player.z <= 6.2) {
-    const t = Math.max(0, Math.min(1, (6 - player.z) / 12));
-    floorY = t * 4.1;
-  } else if (player.y >= 2.2) {
-    floorY = 4.1;
+  // Subtle FOV Widening in Lockdown
+  const targetFov = lockdown ? 78 : 72;
+  if (Math.abs(camera.fov - targetFov) > 0.1) {
+    camera.fov += (targetFov - camera.fov) * Math.min(1, 5.0 * dt);
+    camera.updateProjectionMatrix();
   }
 
-  if (keys[" "] && player.onGround) {
-    player.vy = 5.6;
-    player.onGround = false;
-  }
-  player.vy -= 16.0 * dt;
-  player.y += player.vy * dt;
-  if (player.y <= floorY) {
-    player.y = floorY;
-    player.vy = 0;
-    player.onGround = true;
-  }
+  // Player Movement, Crouch & Corner Lean (Q / Z)
+  const targetLean = (!player.hiding && keys["q"]) ? -1 : (!player.hiding && keys["z"]) ? 1 : 0;
+  leanAmount += (targetLean - leanAmount) * Math.min(1, 10.0 * dt);
 
-  if (isMoving && player.onGround) {
-    stepSoundTimer -= dt;
-    if (stepSoundTimer <= 0) {
-      SFX.playStep(player.crouching);
-      stepSoundTimer = player.crouching ? 0.56 : 0.40;
+  let isMoving = false;
+  if (!player.hiding) {
+    player.crouching = Boolean(keys["shift"]);
+    player.stealth = player.crouching ? 0.96 : 0.72;
+    const activeSpeed = player.crouching ? player.crouchSpeed : player.walkSpeed;
+
+    let forward = 0, strafe = 0;
+    if (keys["w"] || keys["arrowup"])    forward += 1;
+    if (keys["s"] || keys["arrowdown"])  forward -= 1;
+    if (keys["a"] || keys["arrowleft"])  strafe -= 1;
+    if (keys["d"] || keys["arrowright"]) strafe += 1;
+
+    const mag = Math.hypot(forward, strafe);
+    if (mag > 0) { forward /= mag; strafe /= mag; }
+    isMoving = mag > 0;
+
+    const sinY = Math.sin(player.yaw);
+    const cosY = Math.cos(player.yaw);
+    const dx = (-sinY * forward + cosY * strafe) * activeSpeed * dt;
+    const dz = (-cosY * forward - sinY * strafe) * activeSpeed * dt;
+
+    if (!hitsWall(player.x + dx, player.y, player.z)) player.x += dx;
+    if (!hitsWall(player.x, player.y, player.z + dz)) player.z += dz;
+    if (player.z > 13.3) player.z = 13.3;
+
+    let floorY = 0;
+    if (player.x > 10.2 && player.z >= -6.2 && player.z <= 6.2) {
+      const t = Math.max(0, Math.min(1, (6 - player.z) / 12));
+      floorY = t * 4.1;
+    } else if (player.y >= 2.2) {
+      floorY = 4.1;
     }
+
+    if (keys[" "] && player.onGround) {
+      player.vy = 5.6;
+      player.onGround = false;
+    }
+    player.vy -= 16.0 * dt;
+    player.y += player.vy * dt;
+    if (player.y <= floorY) {
+      player.y = floorY;
+      player.vy = 0;
+      player.onGround = true;
+    }
+
+    if (isMoving && player.onGround) {
+      stepSoundTimer -= dt;
+      if (stepSoundTimer <= 0) {
+        SFX.playStep(player.crouching);
+        stepSoundTimer = player.crouching ? 0.56 : 0.40;
+      }
+    }
+  } else {
+    player.stealth = 0.99;
   }
 
-  const eyeHeight = player.crouching ? 1.15 : 1.65;
-  const bob = (player.onGround && isMoving)
+  const eyeHeight = player.hiding ? 0.95 : (player.crouching ? 1.15 : 1.65);
+  const bob = (!player.hiding && player.onGround && isMoving)
     ? Math.sin(elapsed * (player.crouching ? 6.5 : 9.5)) * (player.crouching ? 0.02 : 0.04)
     : Math.sin(elapsed * 2.0) * 0.008;
-  camera.position.set(player.x, player.y + eyeHeight + bob, player.z);
-  camera.rotation.order = "YXZ";
+
+  const leanRightX = Math.cos(player.yaw) * leanAmount * 0.42;
+  const leanRightZ = -Math.sin(player.yaw) * leanAmount * 0.42;
+  camera.position.set(player.x + leanRightX, player.y + eyeHeight + bob, player.z + leanRightZ);
   camera.rotation.y = player.yaw;
   camera.rotation.x = player.pitch;
+  camera.rotation.z = -leanAmount * 0.14;
 
   // Creaky Floorboards
   if (creakCooldown > 0) creakCooldown -= dt;
-  if (isUpstairs() && isMoving && player.onGround && creakCooldown <= 0) {
+  if (!player.hiding && isUpstairs() && isMoving && player.onGround && creakCooldown <= 0) {
     for (const spot of creakySpots) {
       if (Math.hypot(player.x - spot.x, player.z - spot.z) < spot.radius) {
         handleCreakSound(player.x, player.z);
@@ -1111,22 +1570,39 @@ function update() {
     }
   }
 
-  // Nearby Items / Main Door
+  // Nearby Items / Hiding Spots / Main Door
   nearbyItem = null;
-  for (const it of items) {
-    if (!it.stolen && Math.hypot(player.x - it.x, player.z - it.z) < 2.3 && Math.abs(player.y + 1 - it.y) < 1.7) {
-      nearbyItem = it;
-      break;
+  nearbyHideSpot = null;
+  if (!player.hiding) {
+    for (const it of items) {
+      if (!it.stolen && Math.hypot(player.x - it.x, player.z - it.z) < 2.3 && Math.abs(player.y + 1 - it.y) < 1.7) {
+        nearbyItem = it;
+        break;
+      }
+    }
+    if (!nearbyItem && isUpstairs()) {
+      for (const hs of HIDING_SPOTS) {
+        if (Math.hypot(player.x - hs.x, player.z - hs.z) < 2.2) {
+          nearbyHideSpot = hs;
+          break;
+        }
+      }
     }
   }
-  nearMainDoor = lockdown && !isUpstairs() && Math.hypot(player.x - 0, player.z - 13.2) < 2.6;
+  nearMainDoor = !player.hiding && lockdown && !isUpstairs() && Math.hypot(player.x - 0, player.z - 13.2) < 2.6;
 
   const prompt = document.getElementById("interact-prompt");
-  if (nearMainDoor) {
+  if (player.hiding) {
+    prompt.textContent = `Hiding (${currentHideSpot.name}) — Press [E] to Exit`;
+    prompt.classList.remove("hidden");
+  } else if (nearMainDoor) {
     prompt.textContent = "Press [E] to Escape through Main Door!";
     prompt.classList.remove("hidden");
   } else if (nearbyItem) {
     prompt.textContent = `Press [E] to Steal ${nearbyItem.name}`;
+    prompt.classList.remove("hidden");
+  } else if (nearbyHideSpot) {
+    prompt.textContent = `Press [E] to Hide (${nearbyHideSpot.name})`;
     prompt.classList.remove("hidden");
   } else {
     prompt.classList.add("hidden");
@@ -1135,14 +1611,27 @@ function update() {
   if (spotCooldown > 0) spotCooldown -= dt;
   if (lightAlertCooldown > 0) lightAlertCooldown -= dt;
   if (meetingCooldown > 0) meetingCooldown -= dt;
+  if (stairWarnCooldown > 0) stairWarnCooldown -= dt;
 
-  // Heartbeat Tension Audio
+  // Heartbeat Tension Audio + Proximity Flashlight Flicker
   let nearestNpcDist = Infinity;
   for (const n of npcs) {
     if (Math.abs(n.y - player.y) < 2.0) {
       nearestNpcDist = Math.min(nearestNpcDist, Math.hypot(n.x - player.x, n.z - player.z));
     }
   }
+
+  if (flashlightOn && !player.hiding) {
+    if (nearestNpcDist < 6.5 || lockdown) {
+      const flickerChance = lockdown ? 0.14 : (1.0 - nearestNpcDist / 6.5) * 0.16;
+      flashlight.intensity = Math.random() < flickerChance ? (0.4 + Math.random() * 1.4) : 3.4;
+    } else {
+      flashlight.intensity = 3.4;
+    }
+  } else {
+    flashlight.intensity = 0;
+  }
+
   if (nearestNpcDist < 7.5 || lockdown) {
     heartbeatTimer -= dt;
     if (heartbeatTimer <= 0) {
@@ -1173,16 +1662,15 @@ function update() {
     }
   }
 
-  // --- UPDATE NPCs (DT-SCALED + C++ RAYCAST LOS) ---
+  // --- UPDATE NPCs (DT-SCALED + A* + C++ RAYCAST LOS) ---
   for (let i = 0; i < npcs.length; i++) {
     const npc = npcs[i];
     if (npc.floor1Cooldown > 0) npc.floor1Cooldown -= dt;
     if (npc.investigateTimer > 0) npc.investigateTimer -= dt;
 
-    // Gentle mood decay when not in Lockdown (prevents unavoidable arrest)
     if (!lockdown) {
-      npc.mood[1] = Math.max(0.1, npc.mood[1] - 0.004 * dt);
-      npc.mood[2] = Math.max(0.1, npc.mood[2] - 0.003 * dt);
+      npc.mood[1] = Math.max(0.1, npc.mood[1] - 0.0008 * dt); // ~50s to lose 4%
+      npc.mood[2] = Math.max(0.1, npc.mood[2] - 0.0005 * dt); // ~80s to lose 4%
     }
 
     if (npc.meetingTimer > 0) {
@@ -1190,12 +1678,34 @@ function update() {
       if (npc.mixer && sharedIdleClip) setNPCClip(npc, sharedIdleClip);
       const other = npcs[1 - i];
       npc.rig.group.position.set(npc.x, npc.y, npc.z);
-      npc.rig.group.lookAt(other.x, npc.y, other.z);
+      npc.rig.group.rotation.set(0, Math.atan2(other.x - npc.x, other.z - npc.z), 0);
+    } else if (npc.stairStopTimer > 0) {
+      npc.stairStopTimer -= dt;
+      if (npc.mixer && sharedIdleClip) setNPCClip(npc, sharedIdleClip);
+      npc.rig.group.position.set(npc.x, npc.y, npc.z);
+      npc.rig.group.rotation.set(0, Math.atan2(player.x - npc.x, player.z - npc.z), 0);
+
+      // Deliver dialogue at the end of the 5s stare, then walk away
+      if (npc.stairStopTimer <= 0.1 && !npc.stairLineSpoken) {
+        npc.stairLineSpoken = true;
+        stairWarnCooldown = 15.0; // Strict 1 dialogue per 15s after they leave
+        npc.mood[1] = Math.min(1, npc.mood[1] + 0.04);
+        const validIds = npc.name === "Arthur" ? [0, 2, 4] : [1, 3];
+        let fresh = validIds.filter(id => !usedStairLines.has(id));
+        if (fresh.length === 0) {
+          validIds.forEach(id => usedStairLines.delete(id));
+          fresh = validIds;
+        }
+        const idx = fresh[Math.floor(Math.random() * fresh.length)];
+        usedStairLines.add(idx);
+        SFX.playVoice(`stairs_${idx}.mp3`, 0.92);
+        showAlert(`${npc.name}: "${STAIR_LINES[idx]}" (+4% Curiosity)`, "warn", 4600);
+        updateHUD(true);
+      }
     } else if (npc.pauseTimer > 0) {
       npc.pauseTimer -= dt;
       if (npc.mixer && sharedIdleClip) setNPCClip(npc, sharedIdleClip);
     } else {
-      // Pick next destination if path is empty
       // Active Lockdown Hunter: Eleanor (i === 1) re-tracks your position every 1.5s
       if (lockdown && i === 1) {
         lockdownTrackTimer -= dt;
@@ -1205,24 +1715,21 @@ function update() {
         }
       }
 
-      // Pick next destination if path is empty
       if (!npc.path || npc.path.length === 0) {
         const otherNpc = npcs[1 - i];
         const otherIsDownstairs = otherNpc.checkingFloor1 || otherNpc.y < 2.5;
 
         if (lockdown && i === 0) {
-          // Arthur camps & patrols between Main Door (12) and Stair Bottom (11)
           const blockNodes = [12, 11];
           assignNewPath(npc, blockNodes[Math.floor(Math.random() * blockNodes.length)]);
         } else if (lockdown && i === 1) {
-          // Eleanor actively hunts your current node
           assignNewPath(npc, findNearestNode(player.x, player.y, player.z));
         } else if (npc.checkingFloor1 && npc.y < 1.0) {
           npc.checkingFloor1 = false;
           npc.floor1Cooldown = 26.0;
           if (!npc.sawPlayerOnFloor1) {
             playerMissingFromFloor1 = true;
-            npc.mood[1] = Math.min(1, npc.mood[1] + 0.18);
+            npc.mood[1] = Math.min(1, npc.mood[1] + 0.25);
             npc.investigateTimer = 6.0;
             showAlert(`${npc.name} checked downstairs and didn't see you! Their Curiosity spiked!`, "danger", 4600);
           } else {
@@ -1230,12 +1737,10 @@ function update() {
           }
           assignNewPath(npc, FLOOR2_PATROL_NODES[Math.floor(Math.random() * FLOOR2_PATROL_NODES.length)]);
         } else if (!lockdown && !otherIsDownstairs && npc.floor1Cooldown <= 0 && npc.y > 3.0) {
-          // Mutual exclusion: only go downstairs if the other NPC is guarding Floor 2
           npc.checkingFloor1 = true;
           npc.sawPlayerOnFloor1 = false;
           assignNewPath(npc, FLOOR1_CHECK_NODES[Math.floor(Math.random() * FLOOR1_CHECK_NODES.length)]);
         } else if (otherIsDownstairs || (cfg.guardMissing && npcsKnowItemsMissing && Math.random() < 0.65)) {
-          // Solo upstairs guard: patrol tightly between remaining un-stolen items
           const remaining = items.filter(it => !it.stolen);
           const pick = remaining.length > 0 ? remaining[Math.floor(Math.random() * remaining.length)] : null;
           const goal = pick ? findNearestNode(pick.x, 4.1, pick.z) : 4;
@@ -1286,15 +1791,15 @@ function update() {
 
     const sameFloor = Math.abs(player.y - npc.y) < 1.8;
 
-    // Floor 1 Safe Check (with C++ LOS)
-    if (npc.checkingFloor1 && npc.y < 1.0 && sameFloor && Math.hypot(player.x - npc.x, player.z - npc.z) < 10.0) {
+    // Floor 1 Safe Check
+    if (!player.hiding && npc.checkingFloor1 && npc.y < 1.0 && sameFloor && Math.hypot(player.x - npc.x, player.z - npc.z) < 10.0) {
       if (cppHasLOS(npc.x, npc.y + 1.4, npc.z, player.x, player.y + 1.2, player.z) === 1) {
         npc.sawPlayerOnFloor1 = true;
       }
     }
 
-    // Flashlight Beam Detection (with C++ LOS — walls block light!)
-    if (cfg.lightDetect && flashlightOn && sameFloor && isDangerZone() && lightAlertCooldown <= 0) {
+    // Flashlight Beam Detection
+    if (!player.hiding && cfg.lightDetect && flashlightOn && sameFloor && isDangerZone() && lightAlertCooldown <= 0) {
       const toNpcX = npc.x - player.x;
       const toNpcZ = npc.z - player.z;
       const dNpc = Math.hypot(toNpcX, toNpcZ);
@@ -1309,33 +1814,59 @@ function update() {
       }
     }
 
-    // Notice Missing Items + Speak
+    // Notice Missing Items + Speak (6.8m radius covers Watch & Photo from nearest nav nodes)
     if (npc.y > 3.0) {
       for (let idx = 0; idx < items.length; idx++) {
         const it = items[idx];
-        if (it.stolen && !it.noticedMissing && Math.hypot(npc.x - it.x, npc.z - it.z) < 4.8) {
+        if (it.stolen && !it.noticedMissing && Math.hypot(npc.x - it.x, npc.z - it.z) < 6.8) {
           it.noticedMissing = true;
           npcsKnowItemsMissing = true;
           lastNoticedItem = it.name;
-          npc.mood[1] = Math.min(1, npc.mood[1] + 0.22);
-          npc.mood[2] = Math.min(1, npc.mood[2] + 0.18);
-          const tmpl = dialogues.missing_item_comments[idx % dialogues.missing_item_comments.length];
-          const spoken = tmpl.replace("{item}", it.name);
+          npc.mood[1] = Math.min(1, npc.mood[1] + 0.25);
+          npc.mood[2] = Math.min(1, npc.mood[2] + 0.22);
+          const customKey = `${it.id}_${npc.name.toLowerCase()}`;
+          const spoken = MISSING_ITEM_TEXT[customKey]
+            || dialogues.missing_item_comments[idx % dialogues.missing_item_comments.length].replace("{item}", it.name);
           SFX.playVoice(`missing_${npc.name.toLowerCase()}_${it.id}.mp3`, 0.9);
           showAlert(`${npc.name}: "${spoken}"`, "danger", 5000);
+          updateHUD(true);
         }
       }
     }
+    // Staircase Warning: Stop & stare for 5s when passing you on the stairs (1 per 15s)
+    if (!lockdown && !player.hiding && isOnStairs() && stairWarnCooldown <= 0 && npc.stairStopTimer <= 0 && npc.meetingTimer <= 0) {
+      const dxS = player.x - npc.x;
+      const dyS = player.y - npc.y;
+      const dzS = player.z - npc.z;
+      const dist3D = Math.hypot(dxS, dyS, dzS);
+      const fwdX = Math.sin(npc.rig.group.rotation.y);
+      const fwdZ = Math.cos(npc.rig.group.rotation.y);
+      const horiz = Math.hypot(dxS, dzS) || 1;
+      const dot = (dxS / horiz) * fwdX + (dzS / horiz) * fwdZ;
 
-    // Real C++ 3D AABB Raycast + FOV Cone Spotting (Crouch shrinks range!)
-    if (spotCooldown <= 0 && isDangerZone() && sameFloor) {
+      if (Math.abs(dxS) < 2.6 && dist3D < 3.5 && dot > 0.1 &&
+          cppHasLOS(npc.x, npc.y + 1.4, npc.z, player.x, player.y + 1.2, player.z) === 1) {
+        npc.stairStopTimer = 5.0;
+        npc.stairLineSpoken = false;
+        stairWarnCooldown = 20.0; // Locks out the other NPC during the 5s stare + 15s cooldown
+      }
+    }
+
+    // Real C++ 3D AABB Raycast + FOV Cone Spotting (Skipped while safely hiding)
+    if (!player.hiding && spotCooldown <= 0 && isDangerZone() && sameFloor) {
       const effectiveRange = player.crouching ? npc.range * 0.55 : npc.range;
-      const cosHalfFov = 0.25; // ~150° total forward FOV
+      const cosHalfFov = 0.25;
       if (cppIsSpottedLOS(player.x, player.y, player.z, npc.x, npc.y, npc.z, npc.rig.group.rotation.y, effectiveRange, cosHalfFov) === 1) {
         startConfrontation(npc);
         return;
       }
     }
+  }
+
+  telemetryTimer -= dt;
+  if (telemetryVisible && telemetryTimer <= 0) {
+    updateTelemetry();
+    telemetryTimer = 0.2;
   }
 
   updateHUD();
@@ -1362,9 +1893,7 @@ function pauseGame() {
 }
 
 document.addEventListener("pointerlockchange", () => {
-  if (!document.pointerLockElement && state === "PLAYING") {
-    pauseGame();
-  }
+  if (!document.pointerLockElement && state === "PLAYING") pauseGame();
 });
 
 window.addEventListener("blur", () => {
@@ -1383,54 +1912,98 @@ document.addEventListener("mousemove", (e) => {
 });
 
 window.addEventListener("keydown", (e) => {
+  if (e.key === "Tab") {
+    e.preventDefault();
+    telemetryVisible = !telemetryVisible;
+    document.getElementById("telemetry-panel").classList.toggle("hidden", !telemetryVisible);
+    if (telemetryVisible) updateTelemetry();
+    return;
+  }
+  if (e.key === " " && state === "INTRO_ANIM") {
+    e.preventDefault();
+    finishIntroCutscene();
+    return;
+  }
+
   const k = e.key.toLowerCase();
   keys[k] = true;
 
-  if (k === "f" && state === "PLAYING") {
+  if (k === "f" && state === "PLAYING" && !player.hiding) {
     flashlightOn = !flashlightOn;
-    flashlight.intensity = flashlightOn ? 3.4 : 0;
   }
 
   if (k === "e" && state === "PLAYING") {
+    // Toggle Hiding
+    if (player.hiding) {
+      player.hiding = false;
+      player.x = savedHideExit.x;
+      player.y = savedHideExit.y;
+      player.z = savedHideExit.z;
+      currentHideSpot = null;
+      updateHUD(true);
+      return;
+    }
+
     if (nearMainDoor) {
       SFX.playCreak();
+      SFX.stopChaseTheme();
       state = "ESCAPE_ANIM";
       animTimer = 0;
       document.getElementById("interact-prompt").classList.add("hidden");
       if (document.pointerLockElement) document.exitPointerLock();
       return;
     }
+
     if (nearbyItem) {
       SFX.playPickup();
       nearbyItem.stolen = true;
       scene.remove(nearbyItem.mesh);
       player.itemsStolen++;
 
-      if (player.itemsStolen === 3) {
+      if (player.itemsStolen === items.length) {
         lockdown = true;
+        SFX.startChaseTheme();
         lockdownTrackTimer = 1.5;
-        // Immediate ambush: Arthur sprints to Main Door (12), Eleanor hunts you
         npcs.forEach(n => { n.pauseTimer = 0; n.meetingTimer = 0; n.checkingFloor1 = false; });
         assignNewPath(npcs[0], 12);
         assignNewPath(npcs[1], findNearestNode(player.x, player.y, player.z));
-        showAlert("ALL 3 ARTIFACTS STOLEN! Arthur is blocking the Main Door — Eleanor is hunting you!", "danger", 5500);
+        showAlert(`ALL ${items.length} ARTIFACTS STOLEN! Arthur is blocking the Main Door — Eleanor is hunting you!`, "danger", 5500);
       } else {
-        // Stealing makes noise: nearest upstairs NPC investigates the room immediately
-        const itemNode = findNearestNode(nearbyItem.x, 4.1, nearbyItem.z);
-        let alerted = null;
-        for (const n of npcs) {
-          if (n.y > 2.5 && !n.checkingFloor1 && n.meetingTimer <= 0) {
-            assignNewPath(n, itemNode);
-            n.investigateTimer = 5.0;
-            n.pauseTimer = 0;
-            alerted = n.name;
+        const heard = alertNPCsBySound(nearbyItem.x, 4.1, nearbyItem.z, 16.0, `Grabbed ${nearbyItem.name}!`);
+        if (heard.length === 0) {
+          showAlert(`Grabbed ${nearbyItem.name} silently!`, "warn", 2600);
+        }
+      }
+      updateHUD(true);
+      return;
+    }
+
+    if (nearbyHideSpot) {
+      // Check if an NPC has clear LOS as you duck in!
+      let witness = null;
+      for (const n of npcs) {
+        if (Math.abs(n.y - player.y) < 1.8 && Math.hypot(n.x - player.x, n.z - player.z) < 8.5) {
+          if (cppHasLOS(n.x, n.y + 1.4, n.z, player.x, player.y + 1.2, player.z) === 1) {
+            witness = n;
             break;
           }
         }
-        if (alerted) {
-          showAlert(`Grabbed ${nearbyItem.name}! ${alerted} heard the noise and is heading this way!`, "warn", 3800);
-        }
       }
+
+      if (witness) {
+        witness.mood[1] = Math.min(1, witness.mood[1] + 0.20);
+        SFX.playVoice(`hiding_${witness.name.toLowerCase()}.mp3`, 0.95, true);
+        startConfrontation(witness, `${witness.name} saw you duck into the ${nearbyHideSpot.name}! "Why are you hiding in there?" (+20% Curiosity)`);
+        return;
+      }
+
+      savedHideExit = { x: player.x, y: player.y, z: player.z };
+      currentHideSpot = nearbyHideSpot;
+      player.hiding = true;
+      player.x = nearbyHideSpot.hideX;
+      player.y = nearbyHideSpot.hideY;
+      player.z = nearbyHideSpot.hideZ;
+      player.yaw = nearbyHideSpot.lookYaw;
       updateHUD(true);
     }
   }
@@ -1445,17 +2018,20 @@ window.addEventListener("resize", () => {
 
 // --- UI BUTTONS ---
 document.getElementById("btn-to-rules").onclick = () => {
-  SFX.init();
+  SFX.startMenuAmbience();
+  SFX.playUIClick();
   document.getElementById("screen-disclaimer").classList.add("hidden");
   document.getElementById("screen-rules").classList.remove("hidden");
 };
 document.getElementById("btn-to-title").onclick = () => {
+  SFX.playUIClick();
   document.getElementById("screen-rules").classList.add("hidden");
   document.getElementById("screen-title").classList.remove("hidden");
 };
 document.querySelectorAll(".mode-btn").forEach((btn) => {
   btn.onclick = () => {
     document.querySelectorAll(".mode-btn").forEach(b => b.classList.remove("active"));
+    SFX.playUIClick();
     btn.classList.add("active");
     selectedMode = btn.dataset.mode;
     document.getElementById("mode-desc").textContent = MODES[selectedMode].desc;
@@ -1464,6 +2040,7 @@ document.querySelectorAll(".mode-btn").forEach((btn) => {
 });
 document.getElementById("btn-start-loading").onclick = () => {
   SFX.init();
+  SFX.playUIClick();
   runLoadingScreen();
 };
 document.getElementById("btn-resume").onclick = () => {
@@ -1479,7 +2056,6 @@ document.getElementById("btn-continue").onclick = () => {
   } else if (activeNPC.mood[1] >= 1.0) {
     endGame("Game Over — Arrested", `${activeNPC.name}'s curiosity hit 100%. They called the police.`);
   } else {
-    // Send NPC away to a different patrol node so you don't get stuck in a catch loop
     const farNode = FLOOR2_PATROL_NODES[Math.floor(Math.random() * FLOOR2_PATROL_NODES.length)];
     assignNewPath(activeNPC, farNode);
     spotCooldown = 2.8;
@@ -1497,6 +2073,7 @@ document.getElementById("toggle-ai").onclick = (e) => {
   gameCount = 5;
   SafeStorage.set("woods_game_count", 5);
   updateHUD(true);
+  updateTelemetry();
 };
 
 animate();

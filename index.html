@@ -4,118 +4,310 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>The Woods House — 3D First-Person ML Stealth</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@600;700;800&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600;700&display=swap" rel="stylesheet" />
   <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.19.2/dist/ort.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
   <style>
-    * { box-sizing: border-box; font-family: 'Segoe UI', system-ui, sans-serif; user-select: none; }
-    body { margin: 0; overflow: hidden; background: #030305; color: #e6edf3; }
+    :root {
+      --bg-void: #040507;
+      --glass: rgba(9, 11, 16, 0.78);
+      --glass-strong: rgba(8, 10, 14, 0.90);
+      --border-subtle: rgba(255, 255, 255, 0.08);
+      --border-crimson: rgba(196, 40, 48, 0.45);
+      --crimson: #c92a32;
+      --crimson-bright: #ff4d57;
+      --gold: #d4a64a;
+      --text-main: #e6e8ec;
+      --text-muted: #9aa3b0;
+      --font-display: 'Cinzel', Georgia, serif;
+      --font-body: 'Inter', system-ui, -apple-system, sans-serif;
+      --font-mono: 'JetBrains Mono', monospace;
+    }
+
+    * { box-sizing: border-box; font-family: var(--font-body); user-select: none; }
+    body { margin: 0; overflow: hidden; background: var(--bg-void); color: var(--text-main); }
+
     #viewport { position: fixed; inset: 0; }
     #damage-flash {
       position: fixed; inset: 0; background: rgba(160, 0, 0, 0);
       pointer-events: none; z-index: 15; transition: background 0.12s;
     }
+    #blink-overlay {
+      position: fixed; inset: 0; background: #000; opacity: 0;
+      pointer-events: none; z-index: 16; transition: opacity 0.38s ease-in-out;
+    }
     #vignette {
       position: fixed; inset: 0; pointer-events: none; z-index: 8;
-      background: radial-gradient(circle at center, transparent 48%, rgba(0, 0, 0, 0.78) 100%);
+      background: radial-gradient(circle at center, transparent 42%, rgba(0, 0, 0, 0.84) 100%);
     }
 
+    /* Subtle CRT/Film Grain over Menu Overlays */
+    .overlay::before {
+      content: "";
+      position: absolute; inset: 0; pointer-events: none; opacity: 0.04;
+      background-image: radial-gradient(rgba(255,255,255,0.8) 1px, transparent 0);
+      background-size: 3px 3px;
+    }
+
+    /* --- TOP IN-GAME HUD --- */
     #hud {
       position: fixed; top: 14px; left: 50%; transform: translateX(-50%);
-      display: flex; gap: 14px; align-items: center; justify-content: space-between;
-      background: rgba(10, 12, 16, 0.86); border: 1px solid #2b313a;
-      padding: 10px 18px; border-radius: 10px; width: min(960px, 95vw);
-      backdrop-filter: blur(6px); z-index: 10; font-size: 0.84rem;
+      display: flex; gap: 16px; align-items: center; justify-content: space-between;
+      background: rgba(7, 9, 13, 0.78);
+      border: 1px solid var(--border-subtle);
+      border-top: 1px solid rgba(255, 255, 255, 0.14);
+      padding: 10px 20px; border-radius: 6px; width: min(1060px, 96vw);
+      backdrop-filter: blur(12px); z-index: 10; font-size: 0.8rem;
+      box-shadow: 0 12px 32px rgba(0, 0, 0, 0.65);
     }
-    .bars { display: flex; gap: 12px; }
+    .hud-left { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
+    .hud-stat { color: var(--text-muted); font-family: var(--font-mono); font-size: 0.76rem; }
+    .hud-stat strong { color: #fff; font-weight: 700; }
+
+    .bars { display: flex; gap: 14px; }
     .bar-wrap { width: 96px; }
-    .bar-label { display: flex; justify-content: space-between; font-size: 0.72rem; margin-bottom: 3px; color: #c9d1d9; }
-    .bar-bg { background: #1d2229; height: 7px; border-radius: 4px; overflow: hidden; }
-    .bar-fill { height: 100%; transition: width 0.25s; }
-    #trust-fill { background: #3fb950; }
-    #curiosity-fill { background: #d29922; }
-    #aggression-fill { background: #f85149; }
+    .bar-label {
+      display: flex; justify-content: space-between;
+      font-family: var(--font-mono); font-size: 0.68rem; text-transform: uppercase;
+      letter-spacing: 0.6px; margin-bottom: 4px; color: var(--text-muted);
+    }
+    .bar-bg { background: rgba(255,255,255,0.07); height: 5px; border-radius: 2px; overflow: hidden; }
+    .bar-fill { height: 100%; transition: width 0.25s ease-out; }
+    #trust-fill { background: linear-gradient(90deg, #2ea043, #56d364); box-shadow: 0 0 8px rgba(63,185,80,0.45); }
+    #curiosity-fill { background: linear-gradient(90deg, #b87d14, #f2cc60); box-shadow: 0 0 8px rgba(210,153,34,0.45); }
+    #aggression-fill { background: linear-gradient(90deg, #a81c22, #ff4d57); box-shadow: 0 0 10px rgba(248,81,73,0.55); }
 
-    .badge { padding: 3px 8px; border-radius: 4px; font-size: 0.72rem; font-weight: 700; }
-    .badge-rule { background: #1f6feb33; color: #58a6ff; border: 1px solid #1f6feb; }
-    .badge-ml { background: #8957e533; color: #d2a8ff; border: 1px solid #8957e5; }
-    .zone-safe { color: #3fb950; font-weight: 700; margin-left: 8px; }
-    .zone-danger { color: #f85149; font-weight: 700; margin-left: 8px; }
-    .zone-escape { color: #ff4d4d; font-weight: 800; margin-left: 8px; animation: pulse 0.8s infinite; }
-    @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
+    /* Thief-style Light/Visibility Gem */
+    #vis-gem {
+      display: inline-flex; align-items: center; gap: 5px;
+      padding: 3px 9px; border-radius: 3px;
+      font-family: var(--font-mono); font-size: 0.7rem; font-weight: 700;
+      letter-spacing: 0.8px; border: 1px solid var(--border-subtle);
+      transition: all 0.25s;
+    }
+    .vis-hidden { background: rgba(15, 20, 28, 0.8); color: #6e7681; border-color: rgba(255,255,255,0.08) !important; }
+    .vis-dim    { background: rgba(20, 42, 68, 0.7); color: #79c0ff; border-color: rgba(88,166,255,0.4) !important; }
+    .vis-bright { background: rgba(70, 48, 12, 0.75); color: #f2cc60; border-color: rgba(212,166,74,0.6) !important; box-shadow: 0 0 12px rgba(242,204,96,0.35); }
 
+    .badge {
+      padding: 3px 9px; border-radius: 3px;
+      font-family: var(--font-mono); font-size: 0.7rem; font-weight: 700;
+      letter-spacing: 0.5px; text-transform: uppercase;
+    }
+    .badge-rule { background: rgba(31, 111, 235, 0.16); color: #79c0ff; border: 1px solid rgba(56, 139, 253, 0.45); }
+    .badge-ml   { background: rgba(137, 87, 229, 0.2);  color: #d2a8ff; border: 1px solid rgba(163, 113, 247, 0.55); box-shadow: 0 0 10px rgba(137,87,229,0.25); }
+
+    .zone-safe   { color: #56d364; font-family: var(--font-mono); font-size: 0.74rem; font-weight: 700; letter-spacing: 0.4px; }
+    .zone-danger { color: #ff6b6b; font-family: var(--font-mono); font-size: 0.74rem; font-weight: 700; letter-spacing: 0.4px; }
+    .zone-escape { color: #ff3b47; font-family: var(--font-mono); font-size: 0.74rem; font-weight: 800; letter-spacing: 0.8px; animation: pulse 0.75s infinite; }
+    @keyframes pulse { 0%,100% { opacity: 1; text-shadow: 0 0 10px rgba(255,59,71,0.8); } 50% { opacity: 0.35; } }
+
+    /* --- LIVE AI TELEMETRY PANEL ([Tab]) --- */
+    #telemetry-panel {
+      position: fixed; top: 76px; right: 18px; width: 320px;
+      background: rgba(7, 9, 14, 0.88);
+      border: 1px solid rgba(163, 113, 247, 0.45);
+      border-left: 3px solid #a371f7;
+      border-radius: 4px; padding: 12px 14px; z-index: 11;
+      font-family: var(--font-mono); font-size: 0.72rem;
+      color: #c9d1d9; pointer-events: none; line-height: 1.55;
+      backdrop-filter: blur(10px);
+      box-shadow: 0 14px 36px rgba(0, 0, 0, 0.7);
+    }
+    #telemetry-panel h4 {
+      margin: 0 0 8px; color: #d2a8ff; font-family: var(--font-mono);
+      font-size: 0.74rem; letter-spacing: 1px; text-transform: uppercase;
+    }
+    .tele-row { display: flex; justify-content: space-between; border-bottom: 1px solid rgba(255,255,255,0.06); padding: 3px 0; }
+    .tele-ok { color: #56d364; font-weight: 700; }
+    .tele-warn { color: #ff6b6b; font-weight: 700; }
+
+    /* --- CROSSHAIR, PROMPTS & ALERTS --- */
     #crosshair {
       position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
-      width: 6px; height: 6px; border-radius: 50%;
-      background: rgba(255,255,255,0.65); pointer-events: none; z-index: 9;
+      width: 5px; height: 5px; border-radius: 50%;
+      background: rgba(255, 255, 255, 0.75);
+      box-shadow: 0 0 6px rgba(0,0,0,0.9);
+      pointer-events: none; z-index: 9;
     }
     #interact-prompt {
       position: fixed; top: 56%; left: 50%; transform: translateX(-50%);
-      background: rgba(10, 12, 16, 0.9); border: 1px solid #e3b341; color: #e3b341;
-      padding: 6px 14px; border-radius: 6px; font-size: 0.88rem; font-weight: 600;
-      pointer-events: none; z-index: 9;
+      background: rgba(8, 10, 14, 0.88);
+      border: 1px solid rgba(212, 166, 74, 0.65);
+      color: #f2cc60; padding: 7px 16px; border-radius: 4px;
+      font-family: var(--font-mono); font-size: 0.8rem; font-weight: 600;
+      letter-spacing: 0.5px; pointer-events: none; z-index: 9;
+      backdrop-filter: blur(6px);
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.7);
     }
-
     #alert-feed {
-      position: fixed; bottom: 52px; left: 50%; transform: translateX(-50%);
-      max-width: min(780px, 92vw); padding: 10px 18px; border-radius: 8px;
-      background: rgba(10, 12, 16, 0.92); border: 1px solid #30363d;
+      position: fixed; bottom: 54px; left: 50%; transform: translateX(-50%);
+      max-width: min(760px, 92vw); padding: 11px 22px; border-radius: 4px;
+      background: rgba(8, 10, 14, 0.92); border: 1px solid var(--border-subtle);
       color: #f0f6fc; font-size: 0.9rem; text-align: center; z-index: 12;
       pointer-events: none; transition: opacity 0.3s;
+      backdrop-filter: blur(8px); box-shadow: 0 10px 30px rgba(0,0,0,0.8);
     }
-    .alert-warn { border-color: #d29922 !important; color: #f2cc60 !important; }
-    .alert-danger { border-color: #f85149 !important; color: #ff7b72 !important; font-weight: 600; }
-    .alert-whisper { border-color: #8957e5 !important; color: #d2a8ff !important; font-style: italic; }
+    .alert-warn    { border-color: rgba(212,166,74,0.6) !important; color: #f2cc60 !important; }
+    .alert-danger  { border-color: rgba(248,81,73,0.7) !important; color: #ff8080 !important; font-weight: 600; }
+    .alert-whisper { border-color: rgba(163,113,247,0.55) !important; color: #d2a8ff !important; font-style: italic; }
 
+    /* --- BOTTOM STATUS BAR --- */
     #status-bar {
-      position: fixed; bottom: 10px; left: 50%; transform: translateX(-50%);
-      width: min(960px, 95vw); display: flex; justify-content: space-between;
-      font-size: 0.78rem; color: #8b949e; z-index: 10;
-      background: rgba(10,12,16,0.78); padding: 6px 14px; border-radius: 6px;
+      position: fixed; bottom: 12px; left: 50%; transform: translateX(-50%);
+      width: min(1060px, 96vw); display: flex; justify-content: space-between; align-items: center;
+      font-family: var(--font-mono); font-size: 0.72rem; color: #7d8590; z-index: 10;
+      background: rgba(7, 9, 13, 0.72); border: 1px solid var(--border-subtle);
+      padding: 6px 16px; border-radius: 4px; backdrop-filter: blur(8px);
     }
+    #toggle-ai { color: #79c0ff; text-decoration: none; transition: color 0.2s; }
+    #toggle-ai:hover { color: #d2a8ff; text-decoration: underline; }
 
+    /* --- FULLSCREEN OVERLAYS & GOTHIC CARDS --- */
     .overlay {
-      position: fixed; inset: 0; background: rgba(4, 5, 9, 0.9);
+      position: fixed; inset: 0;
       display: flex; flex-direction: column; justify-content: center; align-items: center;
-      padding: 24px; z-index: 20; backdrop-filter: blur(4px);
-    }
-    #screen-title {
-      background: linear-gradient(rgba(4, 5, 10, 0.62), rgba(4, 5, 10, 0.88)),
+      padding: 24px; z-index: 20;
+      background: radial-gradient(circle at 50% 42%, rgba(16, 12, 16, 0.52) 0%, rgba(4, 5, 8, 0.93) 100%),
         url("assets/textures/menu_bg.jpg") center / cover no-repeat;
     }
+    #screen-dialogue, #screen-pause, #screen-end {
+      background: radial-gradient(circle at center, rgba(14, 8, 10, 0.72) 0%, rgba(3, 4, 7, 0.94) 100%);
+      backdrop-filter: blur(6px);
+    }
     .hidden { display: none !important; }
+
     .card {
-      background: rgba(18, 22, 29, 0.94); border: 1px solid #30363d; padding: 26px 30px;
-      border-radius: 12px; max-width: 580px; width: 100%; box-shadow: 0 24px 60px rgba(0,0,0,0.85);
+      position: relative;
+      background: var(--glass);
+      border: 1px solid var(--border-subtle);
+      border-top: 2px solid var(--crimson);
+      padding: 34px 38px; border-radius: 6px;
+      max-width: 620px; width: 100%;
+      backdrop-filter: blur(16px);
+      box-shadow: 0 30px 80px rgba(0, 0, 0, 0.9), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+      animation: cardFadeIn 0.35s ease-out;
     }
-    .card h2 { margin-top: 0; color: #ff6b6b; letter-spacing: 0.4px; }
-    .card p, .card li { color: #c9d1d9; line-height: 1.55; font-size: 0.92rem; }
+    @keyframes cardFadeIn {
+      from { opacity: 0; transform: translateY(10px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+
+    .eyebrow {
+      font-family: var(--font-mono); font-size: 0.7rem; font-weight: 600;
+      letter-spacing: 2.2px; text-transform: uppercase; color: var(--gold);
+      margin-bottom: 8px; display: block;
+    }
+    .card h2 {
+      margin: 0 0 16px;
+      font-family: var(--font-display); font-size: 1.75rem; font-weight: 700;
+      letter-spacing: 2px; text-transform: uppercase;
+      color: #f4f5f7;
+      text-shadow: 0 2px 18px rgba(201, 42, 50, 0.45);
+    }
+    .title-hero {
+      font-size: 2.35rem !important; letter-spacing: 4px !important;
+      color: #fff !important; margin-bottom: 6px !important;
+      text-shadow: 0 0 28px rgba(201, 42, 50, 0.65), 0 4px 12px rgba(0,0,0,0.9) !important;
+    }
+    .divider {
+      height: 1px; margin: 18px 0;
+      background: linear-gradient(90deg, transparent, rgba(201, 42, 50, 0.55), transparent);
+    }
+
+    .card p, .card li { color: #cfd5de; line-height: 1.65; font-size: 0.92rem; margin: 0 0 12px; }
+    .card ul { padding-left: 18px; margin: 0 0 16px; }
+    .card li { margin-bottom: 10px; }
+    .card li::marker { color: var(--crimson-bright); }
+
+    /* Tactile Keyboard Keycaps */
+    kbd {
+      display: inline-block; padding: 2px 6px; margin: 0 1px;
+      font-family: var(--font-mono); font-size: 0.76rem; font-weight: 600;
+      color: #f0f6fc; background: rgba(255, 255, 255, 0.08);
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      border-bottom: 2px solid rgba(255, 255, 255, 0.28);
+      border-radius: 4px;
+    }
+
+    /* Primary & Secondary Buttons */
     button {
-      background: #8b1e24; color: #fff; border: 1px solid #b82931; padding: 10px 20px;
-      border-radius: 6px; cursor: pointer; font-weight: 600; font-size: 0.92rem; margin-top: 12px;
+      background: linear-gradient(180deg, #a62129 0%, #7a141a 100%);
+      color: #fff; border: 1px solid rgba(255, 92, 102, 0.45);
+      padding: 12px 26px; border-radius: 4px; cursor: pointer;
+      font-family: var(--font-display); font-weight: 700; font-size: 0.88rem;
+      letter-spacing: 1.6px; text-transform: uppercase; margin-top: 10px;
+      box-shadow: 0 6px 20px rgba(139, 30, 36, 0.45);
+      transition: all 0.2s ease;
     }
-    button:hover { background: #a8242b; }
-    .mode-row { display: flex; gap: 10px; margin: 14px 0 6px; }
+    button:hover {
+      background: linear-gradient(180deg, #c22730 0%, #8f181f 100%);
+      border-color: rgba(255, 120, 128, 0.8);
+      box-shadow: 0 8px 26px rgba(201, 42, 50, 0.65);
+      transform: translateY(-1px);
+    }
+    button:active { transform: translateY(0); }
+
+    /* Difficulty Selector */
+    .mode-row { display: flex; gap: 10px; margin: 16px 0 12px; }
     .mode-btn {
-      flex: 1; background: #1a2029; border: 1px solid #30363d; color: #c9d1d9;
-      padding: 10px; border-radius: 6px; cursor: pointer; font-weight: 600; margin-top: 0;
+      flex: 1; background: rgba(255, 255, 255, 0.04);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      color: var(--text-muted); padding: 12px 10px; border-radius: 4px;
+      cursor: pointer; font-family: var(--font-display); font-weight: 700;
+      font-size: 0.82rem; letter-spacing: 1.2px; margin-top: 0;
+      box-shadow: none;
     }
-    .mode-btn.active { background: #6e161b; border-color: #ff6b6b; color: #fff; }
+    .mode-btn:hover {
+      background: rgba(255, 255, 255, 0.08); color: #fff;
+      border-color: rgba(255, 255, 255, 0.28); transform: none; box-shadow: none;
+    }
+    .mode-btn.active {
+      background: linear-gradient(180deg, rgba(166, 33, 41, 0.85) 0%, rgba(100, 16, 22, 0.9) 100%);
+      border-color: var(--crimson-bright); color: #fff;
+      box-shadow: 0 0 18px rgba(201, 42, 50, 0.45);
+    }
+    #mode-desc {
+      font-size: 0.84rem; color: var(--text-muted);
+      background: rgba(0, 0, 0, 0.35); border-left: 2px solid var(--gold);
+      padding: 10px 14px; border-radius: 0 4px 4px 0; margin-bottom: 18px;
+    }
+
+    /* Dialogue Choices */
     .choice-btn {
-      display: block; width: 100%; text-align: left; background: #21262d;
-      border: 1px solid #30363d; margin-top: 8px; padding: 11px 14px;
+      display: block; width: 100%; text-align: left;
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      font-family: var(--font-body); font-size: 0.9rem; font-weight: 500;
+      letter-spacing: 0.2px; text-transform: none;
+      margin-top: 10px; padding: 13px 16px; box-shadow: none;
     }
-    .choice-btn:hover { background: #30363d; border-color: #ff6b6b; }
+    .choice-btn:hover {
+      background: rgba(166, 33, 41, 0.22);
+      border-color: var(--crimson-bright);
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+    }
     #npc-reply {
-      margin-top: 14px; padding: 12px; background: #0d1117;
-      border-left: 3px solid #d29922; font-style: italic; font-size: 0.92rem;
+      margin-top: 16px; padding: 14px 16px;
+      background: rgba(0, 0, 0, 0.55);
+      border-left: 3px solid var(--gold);
+      font-style: italic; font-size: 0.94rem; color: #f5e6c8;
+      border-radius: 0 4px 4px 0;
     }
+
+    /* Loading Bar */
     .progress-track {
-      width: 100%; height: 10px; background: #21262d; border-radius: 6px;
-      overflow: hidden; margin-top: 14px; border: 1px solid #30363d;
+      width: 100%; height: 6px; background: rgba(255,255,255,0.08);
+      border-radius: 3px; overflow: hidden; margin-top: 18px;
     }
     .progress-fill {
-      height: 100%; width: 0%; background: #c92a2a; transition: width 0.2s;
+      height: 100%; width: 0%;
+      background: linear-gradient(90deg, #8b1e24, #ff4d57);
+      box-shadow: 0 0 14px rgba(255, 77, 87, 0.7);
+      transition: width 0.25s ease-out;
     }
   </style>
 </head>
@@ -123,16 +315,24 @@
   <div id="viewport"></div>
   <div id="vignette"></div>
   <div id="damage-flash"></div>
+  <div id="blink-overlay"></div>
   <div id="crosshair"></div>
   <div id="interact-prompt" class="hidden">Press [E] to Interact</div>
   <div id="alert-feed" class="hidden"></div>
 
+  <!-- Live AI Telemetry Panel (Toggle with [Tab]) -->
+  <div id="telemetry-panel" class="hidden">
+    <h4>LIVE AI &amp; WASM TELEMETRY [Tab]</h4>
+    <div id="tele-body">Waiting for simulation...</div>
+  </div>
+
   <div id="hud">
-    <div>
+    <div class="hud-left">
       <span id="mode-badge" class="badge badge-rule">Rule-Based (Game 1/4)</span>
-      <span style="margin-left:8px;">Items: <strong id="items-count">0 / 3</strong></span>
-      <span style="margin-left:8px;">Mode: <strong id="diff-label">Normal</strong></span>
-      <span style="margin-left:8px;">Escape Strikes: <strong id="strikes-count">&infin;</strong></span>
+      <span class="hud-stat">Items: <strong id="items-count">0 / 5</strong></span>
+      <span class="hud-stat">Mode: <strong id="diff-label">Normal</strong></span>
+      <span class="hud-stat">Strikes: <strong id="strikes-count">&infin;</strong></span>
+      <span id="vis-gem" class="vis-bright">&#9670; VISIBLE</span>
       <span id="zone-label" class="zone-safe">Ground Floor (Safe)</span>
     </div>
     <div class="bars">
@@ -154,9 +354,12 @@
   <!-- 1. Prototype Notice -->
   <div id="screen-disclaimer" class="overlay">
     <div class="card">
-      <h2>The Woods House — Prototype</h2>
-      <p><strong>Games 1–4:</strong> NPCs run on deterministic <strong>C++ WebAssembly</strong> rules with 3D AABB raycast line-of-sight.</p>
+      <span class="eyebrow">Applied ML &amp; WebAssembly Stealth</span>
+      <h2>The Woods House</h2>
+      <div class="divider"></div>
+      <p><strong>Games 1–4:</strong> NPCs run on deterministic <strong>C++ WebAssembly</strong> rules with 3D AABB raycast line-of-sight and Euclidean A* navigation.</p>
       <p><strong>Game 5+:</strong> A 9-feature <strong>PyTorch Neural Network (ONNX)</strong> activates in your browser to predict mood shifts from stealth, missing items, and floor checks, while C++ <strong>Euclidean Distance</strong> selects choice-aware dialogue.</p>
+      <p style="font-size:0.82rem; color:#8b949e; margin-top:14px;">Tip: Press <kbd>Tab</kbd> anytime in-game to inspect live ONNX tensors &amp; C++ raycast telemetry.</p>
       <button id="btn-to-rules">Next &rarr;</button>
     </div>
   </div>
@@ -164,12 +367,14 @@
   <!-- 2. Rules -->
   <div id="screen-rules" class="overlay hidden">
     <div class="card">
+      <span class="eyebrow">Field Manual</span>
       <h2>How to Survive</h2>
+      <div class="divider"></div>
       <ul>
-        <li><strong>Move &amp; Stealth:</strong> Mouse to look, <code>WASD</code> to move, <code>Space</code> to jump, <code>Shift</code> to crouch silently (shrinks NPC detection range), <code>F</code> to toggle flashlight.</li>
-        <li><strong>Light &amp; Sound:</strong> Shining your flashlight near NPCs or stepping on creaky floorboards upstairs draws them toward you.</li>
-        <li><strong>Floor Checks &amp; Trust:</strong> NPCs periodically check downstairs—if you're missing, their Curiosity spikes. High Trust lets you talk your way out; low Trust makes them aggressive.</li>
-        <li><strong>Lockdown Escape:</strong> Steal all 3 artifacts upstairs, then sprint downstairs to the <strong>Main Door</strong> before they catch you.</li>
+        <li><strong>Move &amp; Peek:</strong> Mouse to look, <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> to move, <kbd>Space</kbd> to jump, <kbd>Shift</kbd> to crouch silently, <kbd>Q</kbd>/<kbd>Z</kbd> to lean around corners, <kbd>F</kbd> for flashlight.</li>
+        <li><strong>Hiding Spots:</strong> Press <kbd>E</kbd> near wardrobes, desks, or crates upstairs to hide. If an NPC sees you duck in, they'll confront you immediately (+20% Curiosity).</li>
+        <li><strong>Light &amp; Sound:</strong> Your flashlight flickers when an NPC is close. Walls dampen sound, but creaky boards and grabbing artifacts alert nearby NPCs.</li>
+        <li><strong>Lockdown Escape:</strong> Steal all <strong>5 artifacts</strong> upstairs, then juke the ambush downstairs to reach the <strong>Main Door</strong>.</li>
       </ul>
       <button id="btn-to-title">Continue &rarr;</button>
     </div>
@@ -177,24 +382,26 @@
 
   <!-- 3. Title Screen + Mode Selection -->
   <div id="screen-title" class="overlay hidden">
-    <div class="card">
-      <h2>THE WOODS HOUSE</h2>
-      <p>Select your difficulty before stepping inside:</p>
+    <div class="card" style="text-align:center;">
+      <span class="eyebrow">First-Person Horror Stealth</span>
+      <h2 class="title-hero">THE WOODS HOUSE</h2>
+      <p style="color:#9aa3b0; font-size:0.86rem; margin-bottom:18px;">Headphones recommended &middot; Select your difficulty before stepping inside</p>
       <div class="mode-row">
         <button type="button" class="mode-btn" data-mode="easy">Easy</button>
         <button type="button" class="mode-btn active" data-mode="normal">Normal</button>
         <button type="button" class="mode-btn" data-mode="nightmare">Nightmare</button>
       </div>
-      <p id="mode-desc">Normal: Flashlight &amp; creaks attract NPCs; 2 escape strikes allowed during lockdown.</p>
-      <button id="btn-start-loading">Start</button>
+      <p id="mode-desc" style="text-align:left;">Normal: Flashlight &amp; creaks attract NPCs; 2 escape strikes allowed during lockdown.</p>
+      <button id="btn-start-loading" style="width:100%; padding:14px;">Enter the House</button>
     </div>
   </div>
 
   <!-- 4. Loading Screen -->
   <div id="screen-loading" class="overlay hidden">
-    <div class="card">
+    <div class="card" style="text-align:center;">
+      <span class="eyebrow">Initializing Runtime</span>
       <h2>Entering the Grounds...</h2>
-      <p id="loading-text">Initializing C++ WASM, PyTorch ONNX, textures, and characters...</p>
+      <p id="loading-text" style="color:#9aa3b0;">Loading C++ WASM, PyTorch ONNX, textures, and characters...</p>
       <div class="progress-track">
         <div id="loading-bar" class="progress-fill"></div>
       </div>
@@ -203,16 +410,18 @@
 
   <!-- Pause Overlay (Esc / Tab Switch) -->
   <div id="screen-pause" class="overlay hidden">
-    <div class="card" style="text-align:center;">
+    <div class="card" style="text-align:center; max-width:440px;">
+      <span class="eyebrow">Simulation Suspended</span>
       <h2>Paused</h2>
-      <p>The house waits in the dark.</p>
-      <button id="btn-resume">Resume</button>
+      <p style="color:#9aa3b0;">The house waits in the dark.</p>
+      <button id="btn-resume" style="width:100%;">Resume</button>
     </div>
   </div>
 
   <!-- Confrontation Modal -->
   <div id="screen-dialogue" class="overlay hidden">
     <div class="card">
+      <span class="eyebrow">Confrontation</span>
       <h2 id="confront-title">Spotted!</h2>
       <p id="confront-sub">Choose how to respond:</p>
       <div id="choices-container"></div>
@@ -223,16 +432,21 @@
 
   <!-- End Screen -->
   <div id="screen-end" class="overlay hidden">
-    <div class="card">
+    <div class="card" style="text-align:center;">
+      <span class="eyebrow">Run Complete</span>
       <h2 id="end-title">Game Over</h2>
+      <div class="divider"></div>
       <p id="end-desc"></p>
-      <button id="btn-restart">Play Next Game</button>
+      <button id="btn-restart" style="width:100%;">Play Next Game</button>
     </div>
   </div>
 
   <div id="status-bar">
     <span id="engine-status">Standby</span>
-    <a href="#" id="toggle-ai" style="color:#58a6ff; text-decoration:none;">[Dev: Jump to Game 5 (Force PyTorch AI)]</a>
+    <span>
+      <span style="margin-right:14px;"><kbd style="font-size:0.68rem;">Tab</kbd> AI Telemetry</span>
+      <a href="#" id="toggle-ai">[Dev: Jump to Game 5 (Force PyTorch AI)]</a>
+    </span>
   </div>
 
   <script src="house_engine.js"></script>
